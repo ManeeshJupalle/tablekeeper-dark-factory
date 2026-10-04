@@ -293,6 +293,7 @@ def run(browser, viewport, label):
     check(f"{label} uncertain nonempty", page.text_content(sel("booking-uncertain")).strip() != "")
     check(f"{label} uncertain no error", page.query_selector(sel("booking-error")) is None)
     check(f"{label} uncertain no confirmation", page.query_selector(sel("confirmation")) is None)
+    token = api("POST", "/auth/login", {"email": ADA["email"], "password": ADA["password"]})[1]["token"]
     mine = api("GET", "/reservations", token=token)[1]["reservations"]
     committed = [r for r in mine if r["status"] == "confirmed" and r["starts_at_local"] == f"{DATE}T19:00"]
     check(f"{label} server committed the lost booking", len(committed) == 1, str(len(committed)))
