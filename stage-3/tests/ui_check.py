@@ -345,6 +345,44 @@ def run(browser, viewport, label):
     page.wait_for_selector(sel("reservation-detail"))
     check(f"{label} lookup after import", page.text_content(sel("reservation-status")).strip() == "confirmed")
 
+    # Stage 3: the grid follows the policy in force for the searched date, and a
+    # booking made in the browser carries those terms and a truthful history.
+    reset(restaurants=[restaurant(manager_user_ids=["u_ada"])])
+    log_in(page)
+    token = api("POST", "/auth/login", {"email": ADA["email"], "password": ADA["password"]})[1]["token"]
+    st, pol = api("POST", "/restaurants/r_anker/policies", {
+        "effective_from": DATE, "slot_minutes": 30, "reservation_duration_minutes": 60, "cancellation_cutoff_minutes": 120,
+        "opening_hours": restaurant()["opening_hours"], "capacities": {"t_1": 2, "t_2": 2, "t_3": 6}}, token=token, key=uuid.uuid4().hex)
+    check(f"{label} s3 policy published", st == 201 and pol["policy_version"] == 1)
+    search(page, party=4)
+    check(f"{label} s3 grid follows policy capacity", page.get_attribute(sel("slot-t_2-19:00"), "data-available") == "false"
+          and page.get_attribute(sel("slot-t_3-19:00"), "data-available") == "true"
+          and page.get_attribute(sel("slot-t_1+t_2-19:00"), "data-available") == "true")
+    check(f"{label} s3 seats from policy", "seats 2" in page.text_content(sel("slot-t_2-19:00"))
+          and "seats 4" in page.text_content(sel("slot-t_1+t_2-19:00")))
+    check(f"{label} s3 grid follows policy duration", page.query_selector(sel("slot-t_3-21:30")) is not None
+          and page.query_selector(sel("slot-t_3-22:00")) is not None)
+    page.click(sel("slot-t_3-19:00"))
+    page.wait_for_selector(sel("booking-form"))
+    page.click(sel("booking-submit"))
+    page.wait_for_selector(sel("confirmation"))
+    ref3 = page.text_content(sel("confirmation-reference")).strip()
+    got = api("GET", f"/reservations/{ref3}", token=token)[1]
+    check(f"{label} s3 browser booking terms", got["accepted_terms"]["policy_version"] == 1 and got["revision"] == 1
+          and got["ends_at"].startswith(f"{DATE}T20:00:00"), json.dumps(got)[:200])
+    page.goto("/lookup")
+    page.fill(sel("lookup-reference-input"), ref3)
+    page.click(sel("lookup-submit"))
+    page.wait_for_selector(sel("reservation-cancel-button"))
+    page.click(sel("reservation-cancel-button"))
+    page.wait_for_selector(sel("reservation-cancel-button"), state="detached")
+    hist = api("GET", f"/reservations/{ref3}/history", token=token)[1]["entries"]
+    check(f"{label} s3 history after browser cancel", [e["event"] for e in hist] == ["created", "cancelled"] and hist[-1]["revision"] == 2)
+    earlier = (dt.date.fromisoformat(DATE) - dt.timedelta(days=1)).isoformat()
+    search(page, party=4, date=earlier)
+    check(f"{label} s3 earlier date uses fixture rules", page.get_attribute(sel("slot-t_2-19:00"), "data-available") == "true"
+          and "seats 4" in page.text_content(sel("slot-t_2-19:00")))
+
     check(f"{label} zero external requests", not external, str(external[:3]))
     ctx.close()
 

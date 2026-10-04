@@ -118,8 +118,24 @@
     const labels = ids.map(id => tableLabel(rest, id));
     return (ids.length === 1 ? 'Table ' : 'Tables ') + labels.join(' + ');
   }
+  // Seats per table: the capacities of the policy in force for the searched date
+  // when the restaurant has published one, otherwise the fixture's capacities.
   function capacityOf(rest, ids) {
-    return ids.reduce((sum, id) => { const t = (rest.tables || []).find(x => x.id === id); return sum + (t ? t.capacity : 0); }, 0);
+    return ids.reduce((sum, id) => {
+      if (rest.policyCapacities && id in rest.policyCapacities) return sum + rest.policyCapacities[id];
+      const t = (rest.tables || []).find(x => x.id === id);
+      return sum + (t ? t.capacity : 0);
+    }, 0);
+  }
+  // The policy for a local date: greatest effective_from not later than the date,
+  // ties to the greatest policy_version (dates compare as YYYY-MM-DD strings).
+  function policyCapacitiesFor(policies, date) {
+    let best = null;
+    for (const p of policies || []) {
+      if (p.effective_from > date) continue;
+      if (!best || p.effective_from > best.effective_from || (p.effective_from === best.effective_from && p.policy_version > best.policy_version)) best = p;
+    }
+    return best ? best.capacities : null;
   }
   function whenText(startsAtLocal) { return friendlyDate(dateOf(startsAtLocal)) + ' at ' + timeOf(startsAtLocal); }
 
@@ -164,13 +180,18 @@
       if (!keepForm) { clear(results); results.append(el('p', { class: 'loading', role: 'status', text: 'Checking availability…' })); }
       try {
         const q = '/availability?restaurant_id=' + encodeURIComponent(params.restaurantId) + '&date=' + encodeURIComponent(params.date) + '&party_size=' + encodeURIComponent(params.party);
-        const [rest, avail] = await Promise.all([api('GET', '/restaurants/' + encodeURIComponent(params.restaurantId)), api('GET', q)]);
+        const [rest, avail, pols] = await Promise.all([
+          api('GET', '/restaurants/' + encodeURIComponent(params.restaurantId)),
+          api('GET', q),
+          api('GET', '/restaurants/' + encodeURIComponent(params.restaurantId) + '/policies'),
+        ]);
         if (mine !== seq) return; // a newer search owns the screen
         if (rest.status !== 200 || avail.status !== 200) {
           clear(results);
           results.append(el('p', { class: 'notice notice-error', role: 'alert', text: avail.status === 200 ? describe(rest) : describe(avail, 'We could not load availability for that search.') }));
           return;
         }
+        rest.data.policyCapacities = pols.status === 200 && pols.data ? policyCapacitiesFor(pols.data.policies, params.date) : null;
         current = { params, restaurant: rest.data, availability: avail.data };
         renderResults();
       } catch (err) {
