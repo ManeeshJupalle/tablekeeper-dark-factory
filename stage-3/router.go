@@ -81,6 +81,23 @@ func (a *app) route(w http.ResponseWriter, r *http.Request) {
 		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) {
 			a.getRestaurant(w, r, segments[1])
 		}})
+	case len(segments) == 3 && segments[0] == "restaurants" && segments[2] == "policies":
+		dispatch(w, r, methodHandlers{
+			http.MethodGet:  func(w http.ResponseWriter, r *http.Request) { a.listPolicies(w, r, segments[1]) },
+			http.MethodPost: func(w http.ResponseWriter, r *http.Request) { a.publishPolicy(w, r, segments[1]) },
+		})
+	case len(segments) == 3 && segments[0] == "reservations" && segments[2] == "history":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) {
+			a.reservationHistory(w, r, segments[1])
+		}})
+	case len(segments) == 3 && segments[0] == "reservations" && segments[2] == "decision":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) {
+			a.reservationDecision(w, r, segments[1])
+		}})
+	case path == pathSeries:
+		dispatch(w, r, methodHandlers{http.MethodPost: a.createSeries})
+	case len(segments) == 2 && segments[0] == "series":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.getSeries(w, r, segments[1]) }})
 	case path == "/availability":
 		dispatch(w, r, methodHandlers{http.MethodGet: a.availability})
 	case path == pathReservations:

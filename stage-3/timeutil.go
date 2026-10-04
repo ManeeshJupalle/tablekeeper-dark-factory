@@ -35,6 +35,24 @@ func (d localDate) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
 }
 
+// addDays returns the calendar date n days later (n may be negative).
+func (d localDate) addDays(n int) localDate {
+	t := time.Date(d.Year, time.Month(d.Month), d.Day+n, 0, 0, 0, 0, time.UTC)
+	return localDate{t.Year(), int(t.Month()), t.Day()}
+}
+
+// compare orders two dates: negative, zero or positive.
+func (d localDate) compare(o localDate) int {
+	switch {
+	case d.Year != o.Year:
+		return d.Year - o.Year
+	case d.Month != o.Month:
+		return d.Month - o.Month
+	default:
+		return d.Day - o.Day
+	}
+}
+
 // String renders the YYYY-MM-DDTHH:MM form used by the API.
 func (t localTime) String() string {
 	return fmt.Sprintf("%sT%02d:%02d", t.localDate, t.Minute/minutesPerHour, t.Minute%minutesPerHour)

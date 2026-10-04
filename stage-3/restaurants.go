@@ -24,7 +24,8 @@ type tableView struct {
 	Capacity int    `json:"capacity"`
 }
 
-// restaurantDetail is the fixture's shape, used by GET /restaurants/{id} and export.
+// restaurantDetail is the original fixture configuration (policy 0), used by
+// GET /restaurants/{id} and export, plus the restaurant revision.
 type restaurantDetail struct {
 	ID                         string             `json:"id"`
 	Name                       string             `json:"name"`
@@ -35,6 +36,8 @@ type restaurantDetail struct {
 	OpeningHours               []openingHoursView `json:"opening_hours"`
 	Tables                     []tableView        `json:"tables"`
 	Combinable                 [][]string         `json:"combinable"`
+	ManagerUserIDs             []string           `json:"manager_user_ids"`
+	Revision                   int                `json:"revision"`
 }
 
 func detailOf(r *Restaurant) restaurantDetail {
@@ -42,15 +45,14 @@ func detailOf(r *Restaurant) restaurantDetail {
 		ID:                         r.ID,
 		Name:                       r.Name,
 		Timezone:                   r.Timezone,
-		SlotMinutes:                r.SlotMinutes,
-		ReservationDurationMinutes: r.DurationMinutes,
-		CancellationCutoffMinutes:  r.CutoffMinutes,
-		OpeningHours:               []openingHoursView{},
+		SlotMinutes:                r.Base.SlotMinutes,
+		ReservationDurationMinutes: r.Base.DurationMinutes,
+		CancellationCutoffMinutes:  r.Base.CutoffMinutes,
+		OpeningHours:               hoursView(r.Base.Hours),
 		Tables:                     []tableView{},
 		Combinable:                 [][]string{},
-	}
-	for _, h := range r.Hours {
-		d.OpeningHours = append(d.OpeningHours, openingHoursView{h.Weekday, h.Opens, h.Closes})
+		ManagerUserIDs:             append([]string{}, r.Managers...),
+		Revision:                   r.Revision,
 	}
 	for _, t := range r.Tables {
 		d.Tables = append(d.Tables, tableView{t.ID, t.Label, t.Capacity})
@@ -88,11 +90,30 @@ type optionView struct {
 	Capacity int      `json:"capacity"`
 }
 
+// Availability rules reported by explain=true, in this order (stage 3).
+const (
+	ruleCapacity  = "capacity"
+	ruleNoOverlap = "no_overlap"
+)
+
+type ruleView struct {
+	Rule  string `json:"rule"`
+	Holds bool   `json:"holds"`
+}
+
+type explainView struct {
+	TableID       string     `json:"table_id"`
+	PolicyVersion int        `json:"policy_version"`
+	Available     bool       `json:"available"`
+	Rules         []ruleView `json:"rules"`
+}
+
 type slotView struct {
-	StartsAtLocal     string       `json:"starts_at_local"`
-	StartsAt          string       `json:"starts_at"`
-	AvailableTableIDs []string     `json:"available_table_ids"`
-	AvailableOptions  []optionView `json:"available_options"`
+	StartsAtLocal     string         `json:"starts_at_local"`
+	StartsAt          string         `json:"starts_at"`
+	AvailableTableIDs []string       `json:"available_table_ids"`
+	AvailableOptions  []optionView   `json:"available_options"`
+	Explain           *[]explainView `json:"explain,omitempty"` // only with explain=true
 }
 
 type availabilityView struct {
@@ -113,6 +134,9 @@ func queryInt(raw string) (int, bool) {
 	return n, err == nil
 }
 
+// explainValue is the only accepted value of the optional explain parameter.
+const explainValue = "true"
+
 func (a *app) availability(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	rid, dateRaw, partyRaw := q.Get("restaurant_id"), q.Get("date"), q.Get("party_size")
@@ -130,6 +154,13 @@ func (a *app) availability(w http.ResponseWriter, r *http.Request) {
 		writeError(w, invalid("party_size must be a positive integer"))
 		return
 	}
+	values, explain := q["explain"]
+	for _, v := range values {
+		if v != explainValue {
+			writeError(w, invalid("explain accepts only the value true"))
+			return
+		}
+	}
 
 	a.store.mu.Lock()
 	defer a.store.mu.Unlock()
@@ -143,42 +174,52 @@ func (a *app) availability(w http.ResponseWriter, r *http.Request) {
 		RestaurantID: rest.ID,
 		Date:         date.String(),
 		Timezone:     rest.Timezone,
-		Slots:        st.slotsFor(rest, date, party),
+		Slots:        st.slotsFor(rest, date, party, explain),
 	})
 }
 
-// slotsFor lists every grid slot of the day (§8) with the tables that can seat
-// the party and are free for the whole reservation, then every declared pair
-// that can (stage 2). Caller holds the lock.
-func (s *State) slotsFor(rest *Restaurant, date localDate, party int) []slotView {
+// slotsFor lists every grid slot of the day under the policy selected for that
+// date, with the tables that can seat the party and are free for the whole
+// reservation, then every declared pair that can. Caller holds the lock.
+func (s *State) slotsFor(rest *Restaurant, date localDate, party int, explain bool) []slotView {
+	terms := rest.termsFor(date)
 	slots := []slotView{}
 	weekday := weekdayOf(date)
-	for _, h := range rest.Hours {
+	for _, h := range terms.Hours {
 		if h.Weekday != weekday {
 			continue
 		}
-		for minute := h.opensMin; minute+rest.DurationMinutes <= h.closesMin; minute += rest.SlotMinutes {
+		for minute := h.opensMin; minute+terms.DurationMinutes <= h.closesMin; minute += terms.SlotMinutes {
 			lt := localTime{date, minute}
 			start, ok := resolveLocal(rest.Location, lt)
 			if !ok {
 				continue // the slot falls in a spring-forward gap
 			}
-			end := start.Add(rest.duration())
-			singles := []string{}
-			options := []optionView{}
+			end := start.Add(terms.duration())
+			slot := slotView{StartsAtLocal: lt.String(), StartsAt: formatTime(start), AvailableTableIDs: []string{}, AvailableOptions: []optionView{}}
+			explained := []explainView{}
 			for _, t := range rest.Tables {
-				if t.Capacity >= party && !s.tableBusy(rest, t.ID, start, end, nil) {
-					singles = append(singles, t.ID)
-					options = append(options, optionView{[]string{t.ID}, t.Capacity})
+				fits := terms.Capacities[t.ID] >= party
+				free := !s.tableBusy(rest, t.ID, start, end, nil)
+				if fits && free {
+					slot.AvailableTableIDs = append(slot.AvailableTableIDs, t.ID)
+					slot.AvailableOptions = append(slot.AvailableOptions, optionView{[]string{t.ID}, terms.Capacities[t.ID]})
 				}
+				explained = append(explained, explainView{
+					TableID: t.ID, PolicyVersion: terms.PolicyVersion, Available: fits && free,
+					Rules: []ruleView{{ruleCapacity, fits}, {ruleNoOverlap, free}},
+				})
 			}
 			for _, p := range rest.Combinable {
-				capacity := rest.table(p[0]).Capacity + rest.table(p[1]).Capacity
+				capacity := terms.capacity(p)
 				if capacity >= party && !s.setBusy(rest, p, start, end, nil) {
-					options = append(options, optionView{[]string{p[0], p[1]}, capacity})
+					slot.AvailableOptions = append(slot.AvailableOptions, optionView{[]string{p[0], p[1]}, capacity})
 				}
 			}
-			slots = append(slots, slotView{lt.String(), formatTime(start), singles, options})
+			if explain {
+				slot.Explain = &explained
+			}
+			slots = append(slots, slot)
 		}
 	}
 	return slots

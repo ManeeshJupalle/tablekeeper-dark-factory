@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 )
 
 // Test-control endpoints (§3.3, §10): reset, export and import. Each replaces or
@@ -25,7 +24,7 @@ func (a *app) reset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, e)
 		return
 	}
-	st, e := stateFromFixture(fixture, time.Now().UTC().Truncate(time.Second))
+	st, e := stateFromFixture(fixture, stamp())
 	if e != nil {
 		writeError(w, e)
 		return
@@ -45,9 +44,31 @@ type exportEnvelope struct {
 type exportState struct {
 	Users        []exportUser        `json:"users"`
 	Tokens       []exportToken       `json:"tokens"`
-	Restaurants  []restaurantDetail  `json:"restaurants"`
+	Restaurants  []exportRestaurant  `json:"restaurants"`
 	Reservations []exportReservation `json:"reservations"`
+	Series       []exportSeries      `json:"series"`
 	Idempotency  []exportIdem        `json:"idempotency"`
+}
+
+// exportRestaurant is the fixture configuration plus revision and policies.
+type exportRestaurant struct {
+	restaurantDetail
+	Policies []policyView `json:"policies"`
+}
+
+type exportOccurrence struct {
+	Index         int    `json:"index"`
+	ReservationID string `json:"reservation_id"`
+	Exception     bool   `json:"exception"`
+}
+
+type exportSeries struct {
+	ID            string             `json:"id"`
+	UserID        string             `json:"user_id"`
+	RestaurantID  string             `json:"restaurant_id"`
+	Revision      int                `json:"revision"`
+	IntervalWeeks int                `json:"interval_weeks"`
+	Occurrences   []exportOccurrence `json:"occurrences"`
 }
 
 type exportUser struct {
@@ -63,16 +84,19 @@ type exportToken struct {
 }
 
 type exportReservation struct {
-	ID            string   `json:"id"`
-	Reference     string   `json:"reference"`
-	UserID        string   `json:"user_id"`
-	RestaurantID  string   `json:"restaurant_id"`
-	TableIDs      []string `json:"table_ids"`
-	PartySize     int      `json:"party_size"`
-	Status        string   `json:"status"`
-	StartsAtLocal string   `json:"starts_at_local"`
-	StartsAt      string   `json:"starts_at"`
-	CreatedAt     string   `json:"created_at"`
+	ID            string             `json:"id"`
+	Reference     string             `json:"reference"`
+	UserID        string             `json:"user_id"`
+	RestaurantID  string             `json:"restaurant_id"`
+	TableIDs      []string           `json:"table_ids"`
+	PartySize     int                `json:"party_size"`
+	Status        string             `json:"status"`
+	StartsAtLocal string             `json:"starts_at_local"`
+	StartsAt      string             `json:"starts_at"`
+	CreatedAt     string             `json:"created_at"`
+	Revision      int                `json:"revision"`
+	AcceptedTerms termsView          `json:"accepted_terms"`
+	History       []historyEntryView `json:"history"`
 }
 
 type exportIdem struct {
@@ -89,8 +113,9 @@ func snapshot(st *State) exportEnvelope {
 	out := exportState{
 		Users:        []exportUser{},
 		Tokens:       []exportToken{},
-		Restaurants:  []restaurantDetail{},
+		Restaurants:  []exportRestaurant{},
 		Reservations: []exportReservation{},
+		Series:       []exportSeries{},
 		Idempotency:  []exportIdem{},
 	}
 	for _, u := range st.users {
@@ -105,7 +130,19 @@ func snapshot(st *State) exportEnvelope {
 		}
 	}
 	for _, r := range st.restaurants {
-		out.Restaurants = append(out.Restaurants, detailOf(r))
+		er := exportRestaurant{restaurantDetail: detailOf(r), Policies: []policyView{}}
+		for _, p := range r.Policies {
+			er.Policies = append(er.Policies, policyViewOf(p))
+		}
+		out.Restaurants = append(out.Restaurants, er)
+	}
+	for _, sr := range st.series {
+		es := exportSeries{ID: sr.ID, UserID: sr.UserID, RestaurantID: sr.RestaurantID,
+			Revision: sr.Revision, IntervalWeeks: sr.IntervalWeeks, Occurrences: []exportOccurrence{}}
+		for _, o := range sr.Occurrences {
+			es.Occurrences = append(es.Occurrences, exportOccurrence{o.Index, o.ReservationID, o.Exception})
+		}
+		out.Series = append(out.Series, es)
 	}
 	for _, res := range st.reservations {
 		out.Reservations = append(out.Reservations, exportReservation{
@@ -119,6 +156,9 @@ func snapshot(st *State) exportEnvelope {
 			StartsAtLocal: res.StartsAtLocal.String(),
 			StartsAt:      formatTime(res.StartsAt),
 			CreatedAt:     formatTime(res.CreatedAt.UTC()),
+			Revision:      res.Revision,
+			AcceptedTerms: termsViewOf(res.Terms),
+			History:       historyViewOf(res),
 		})
 	}
 	for _, rec := range st.idem {
@@ -164,9 +204,11 @@ func (a *app) importState(w http.ResponseWriter, r *http.Request) {
 }
 
 // stateFromExport rebuilds a State from an export envelope produced by this
-// service or by the stage-1 service (same track and format_version; restaurants
-// without `combinable`, reservations with `table_id`), verifying every record so
-// a bad import leaves the destination as is.
+// service or by the stage-1 or stage-2 service (same track and format_version).
+// Earlier exports lack combinable, policies, revisions, terms, histories and
+// series: bookings then start at revision 1 under policy 0 with a created entry
+// at created_at, and restaurants at revision 1. Every record is verified so a
+// bad import leaves the destination as is.
 func stateFromExport(envelope obj) (*State, *apiError) {
 	track, e := requiredString(envelope, "track")
 	if e != nil {
@@ -241,16 +283,25 @@ func stateFromExport(envelope obj) (*State, *apiError) {
 	if e != nil {
 		return nil, e
 	}
-	if e := addRestaurants(st, restaurants); e != nil {
+	if e := addRestaurants(st, restaurants, true); e != nil {
 		return nil, e
 	}
 	reservations, e := arrayField(state, "reservations")
 	if e != nil {
 		return nil, e
 	}
-	now := time.Now().UTC().Truncate(time.Second)
+	importedAt := stamp()
 	for _, rv := range reservations {
-		if e := addReservation(st, rv, now); e != nil {
+		if e := addReservation(st, rv, importedAt, true); e != nil {
+			return nil, e
+		}
+	}
+	series, e := arrayField(state, "series")
+	if e != nil {
+		return nil, e
+	}
+	for _, sv := range series {
+		if e := addImportedSeries(st, sv); e != nil {
 			return nil, e
 		}
 	}
@@ -269,6 +320,67 @@ func stateFromExport(envelope obj) (*State, *apiError) {
 		st.idem[rec.idemKey] = rec
 	}
 	return st, nil
+}
+
+// addImportedSeries restores one exported series and links its reservations,
+// which must belong to the series owner and restaurant and to no other series.
+func addImportedSeries(st *State, v any) *apiError {
+	o, e := objectAt(v, "series")
+	if e != nil {
+		return e
+	}
+	sr := &Series{}
+	if sr.ID, e = identifier(o, "id"); e != nil {
+		return e
+	}
+	if st.seriesByID[sr.ID] != nil {
+		return invalid("duplicate series id " + sr.ID)
+	}
+	if sr.UserID, e = requiredString(o, "user_id"); e != nil {
+		return e
+	}
+	if sr.RestaurantID, e = requiredString(o, "restaurant_id"); e != nil {
+		return e
+	}
+	if sr.Revision, e = requiredInt(o, "revision", initialRevision); e != nil {
+		return e
+	}
+	if sr.IntervalWeeks, e = seriesInt(o, "interval_weeks", minSeriesWeeks, maxSeriesWeeks); e != nil {
+		return e
+	}
+	occurrences, e := arrayField(o, "occurrences")
+	if e != nil {
+		return e
+	}
+	if len(occurrences) < minSeriesCount || len(occurrences) > maxSeriesCount {
+		return invalid("a series has 2 to 12 occurrences")
+	}
+	for i, ov := range occurrences {
+		oo, e := objectAt(ov, "occurrence")
+		if e != nil {
+			return e
+		}
+		index, e := requiredInt(oo, "index", 0)
+		if e != nil {
+			return e
+		}
+		resID, e := requiredString(oo, "reservation_id")
+		if e != nil {
+			return e
+		}
+		exception, ok := oo["exception"].(bool)
+		if !ok || index != i {
+			return invalid("occurrences need consecutive indices and a boolean exception")
+		}
+		res := st.reservationByID[resID]
+		if res == nil || res.UserID != sr.UserID || res.RestaurantID != sr.RestaurantID || res.SeriesID != "" {
+			return invalid("series occurrence names an unknown or foreign reservation")
+		}
+		res.SeriesID = sr.ID
+		sr.Occurrences = append(sr.Occurrences, &Occurrence{Index: index, ReservationID: resID, Exception: exception})
+	}
+	st.addSeries(sr)
+	return nil
 }
 
 func parseIdemRecord(st *State, v any) (*IdemRecord, *apiError) {

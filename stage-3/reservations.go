@@ -14,20 +14,22 @@ const (
 )
 
 type reservationView struct {
-	ReservationID string   `json:"reservation_id"`
-	Reference     string   `json:"reference"`
-	RestaurantID  string   `json:"restaurant_id"`
-	TableIDs      []string `json:"table_ids"`
-	TableID       *string  `json:"table_id,omitempty"` // only for a single-table set
-	PartySize     int      `json:"party_size"`
-	Status        string   `json:"status"`
-	StartsAtLocal string   `json:"starts_at_local"`
-	StartsAt      string   `json:"starts_at"`
-	EndsAt        string   `json:"ends_at"`
-	CreatedAt     string   `json:"created_at"`
+	ReservationID string    `json:"reservation_id"`
+	Reference     string    `json:"reference"`
+	RestaurantID  string    `json:"restaurant_id"`
+	TableIDs      []string  `json:"table_ids"`
+	TableID       *string   `json:"table_id,omitempty"` // only for a single-table set
+	PartySize     int       `json:"party_size"`
+	Status        string    `json:"status"`
+	StartsAtLocal string    `json:"starts_at_local"`
+	StartsAt      string    `json:"starts_at"`
+	EndsAt        string    `json:"ends_at"`
+	CreatedAt     string    `json:"created_at"`
+	Revision      int       `json:"revision"`
+	AcceptedTerms termsView `json:"accepted_terms"`
 }
 
-func viewOf(res *Reservation, rest *Restaurant) reservationView {
+func viewOf(res *Reservation) reservationView {
 	v := reservationView{
 		ReservationID: res.ID,
 		Reference:     res.Reference,
@@ -37,8 +39,10 @@ func viewOf(res *Reservation, rest *Restaurant) reservationView {
 		Status:        res.Status,
 		StartsAtLocal: res.StartsAtLocal.String(),
 		StartsAt:      formatTime(res.StartsAt),
-		EndsAt:        formatTime(res.StartsAt.Add(rest.duration())),
+		EndsAt:        formatTime(res.endsAt()),
 		CreatedAt:     formatTime(res.CreatedAt.UTC()),
+		Revision:      res.Revision,
+		AcceptedTerms: termsViewOf(res.Terms),
 	}
 	if len(res.TableIDs) == 1 {
 		v.TableID = &res.TableIDs[0]
@@ -139,53 +143,65 @@ func parseBookingFields(m map[string]any, requireAll bool) (bookingFields, *apiE
 }
 
 // placement is a fully resolved booking request, checked against everything
-// except table occupancy. tableIDs is in canonical (fixture/combinable) order.
+// except table occupancy. tableIDs is in canonical (fixture/combinable) order and
+// terms are the policy selected for the local start date.
 type placement struct {
 	tableIDs  []string
 	local     localTime
 	startsAt  time.Time
 	partySize int
+	terms     *Terms
 }
 
-func (p placement) endsAt(rest *Restaurant) time.Time { return p.startsAt.Add(rest.duration()) }
+func (p placement) endsAt() time.Time { return p.startsAt.Add(p.terms.duration()) }
 
-// resolveTableSet validates a requested table set against the restaurant: no
-// duplicates, at most a pair, every table known, and a pair declared combinable.
-// It returns the set in canonical order and its summed capacity.
-func resolveTableSet(rest *Restaurant, ids []string) ([]string, int, *apiError) {
+// currentPlacement describes a booking as it stands, with its own accepted terms.
+func currentPlacement(res *Reservation) placement {
+	return placement{tableIDs: res.TableIDs, local: res.StartsAtLocal, startsAt: res.StartsAt, partySize: res.PartySize, terms: res.Terms}
+}
+
+// checkDistinct rejects a table set that names a table twice.
+func checkDistinct(ids []string) *apiError {
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if seen[id] {
-			return nil, 0, invalid("duplicate table id in the set")
+			return invalid("duplicate table id in the set")
 		}
 		seen[id] = true
 	}
-	if len(ids) > maxTablesPerBooking {
-		return nil, 0, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "at most two tables may be combined")
+	return nil
+}
+
+// resolveTableSet validates a requested table set against the restaurant: no
+// duplicates, at most a pair, every table known, and a pair declared combinable.
+// It returns the set in canonical order.
+func resolveTableSet(rest *Restaurant, ids []string) ([]string, *apiError) {
+	if e := checkDistinct(ids); e != nil {
+		return nil, e
 	}
-	capacity := 0
+	if len(ids) > maxTablesPerBooking {
+		return nil, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "at most two tables may be combined")
+	}
 	for _, id := range ids {
-		t := rest.table(id)
-		if t == nil {
-			return nil, 0, notFound("no such table at this restaurant")
+		if rest.table(id) == nil {
+			return nil, notFound("no such table at this restaurant")
 		}
-		capacity += t.Capacity
 	}
 	if len(ids) == 1 {
-		return []string{ids[0]}, capacity, nil
+		return []string{ids[0]}, nil
 	}
 	p := rest.pair(ids[0], ids[1])
 	if p == nil {
-		return nil, 0, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "those tables are not declared combinable")
+		return nil, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "those tables are not declared combinable")
 	}
-	return []string{p[0], p[1]}, capacity, nil
+	return []string{p[0], p[1]}, nil
 }
 
-// resolvePlacement applies the POST /reservations rules in order: the table set
-// is valid, the local time exists, it is inside opening hours and on the grid,
-// and the party fits the (summed) capacity.
+// resolvePlacement applies the booking rules in order: the table set is valid,
+// the local time exists, and under the policy for that local date the start is
+// inside opening hours, on the grid, ends by closing, and the party fits.
 func resolvePlacement(rest *Restaurant, ids []string, lt localTime, party int) (placement, *apiError) {
-	set, capacity, e := resolveTableSet(rest, ids)
+	set, e := resolveTableSet(rest, ids)
 	if e != nil {
 		return placement{}, e
 	}
@@ -193,57 +209,39 @@ func resolvePlacement(rest *Restaurant, ids []string, lt localTime, party int) (
 	if !ok {
 		return placement{}, fail(http.StatusUnprocessableEntity, codeInvalidLocalTime, "that local time does not exist on this date")
 	}
-	if e := rest.checkHours(lt); e != nil {
+	terms := rest.termsFor(lt.localDate)
+	if e := terms.checkHours(lt); e != nil {
 		return placement{}, e
 	}
-	if party > capacity {
+	if party > terms.capacity(set) {
 		return placement{}, fail(http.StatusUnprocessableEntity, codeExceedsCapacity, "party_size exceeds the seating capacity")
 	}
-	return placement{tableIDs: set, local: lt, startsAt: start, partySize: party}, nil
-}
-
-// checkHours finds the opening window containing the start and applies the slot
-// grid and closing rules; a start outside every window is outside opening hours.
-func (r *Restaurant) checkHours(lt localTime) *apiError {
-	weekday := weekdayOf(lt.localDate)
-	for _, h := range r.Hours {
-		if h.Weekday != weekday || lt.Minute < h.opensMin || lt.Minute >= h.closesMin {
-			continue
-		}
-		if (lt.Minute-h.opensMin)%r.SlotMinutes != 0 {
-			return fail(http.StatusUnprocessableEntity, codeNotOnGrid, "starts_at_local is not on the slot grid")
-		}
-		if lt.Minute+r.DurationMinutes > h.closesMin {
-			return fail(http.StatusUnprocessableEntity, codeOutsideHours, "the reservation would end after closing time")
-		}
-		return nil
-	}
-	return fail(http.StatusUnprocessableEntity, codeOutsideHours, "the restaurant is closed at that time")
+	return placement{tableIDs: set, local: lt, startsAt: start, partySize: party, terms: terms}, nil
 }
 
 // tableBusy reports whether a confirmed reservation other than those in exclude
-// occupies the table during the half-open interval [start, end). A combination
-// booking occupies every one of its tables.
+// occupies the table during the half-open interval [start, end).
 func (s *State) tableBusy(rest *Restaurant, tableID string, start, end time.Time, exclude map[string]bool) bool {
 	return s.setBusy(rest, []string{tableID}, start, end, exclude)
 }
 
 // setBusy reports whether any table of the set is occupied during [start, end).
+// Each existing booking occupies its tables for its own accepted duration.
 func (s *State) setBusy(rest *Restaurant, ids []string, start, end time.Time, exclude map[string]bool) bool {
 	for _, res := range s.reservations {
 		if res.Status != statusConfirmed || res.RestaurantID != rest.ID || exclude[res.ID] || !sharesTable(res.TableIDs, ids) {
 			continue
 		}
-		resEnd := res.StartsAt.Add(rest.duration())
-		if res.StartsAt.Before(end) && start.Before(resEnd) {
+		if res.StartsAt.Before(end) && start.Before(res.endsAt()) {
 			return true
 		}
 	}
 	return false
 }
 
-func cutoffPassed(rest *Restaurant, res *Reservation, now time.Time) bool {
-	return !now.Before(res.StartsAt.Add(-rest.cutoff()))
+// cutoffPassed applies the booking's accepted cutoff against its current start.
+func cutoffPassed(res *Reservation, at time.Time) bool {
+	return !at.Before(res.StartsAt.Add(-res.Terms.cutoff()))
 }
 
 // idempotencyKey validates the header (§7). Caller holds the lock.
@@ -273,6 +271,27 @@ func replay(w http.ResponseWriter, st *State, k idemKey, canonical string) bool 
 }
 
 var tableUnavailable = fail(http.StatusConflict, codeTableUnavailable, "a table is taken for an overlapping interval")
+
+// newReservation creates a confirmed booking at revision 1 with its created entry.
+func (s *State) newReservation(user *User, rest *Restaurant, p placement, at time.Time) *Reservation {
+	res := &Reservation{
+		ID:            s.newReservationID(),
+		Reference:     s.newReference(),
+		UserID:        user.ID,
+		RestaurantID:  rest.ID,
+		TableIDs:      p.tableIDs,
+		PartySize:     p.partySize,
+		Status:        statusConfirmed,
+		StartsAtLocal: p.local,
+		StartsAt:      p.startsAt,
+		CreatedAt:     at,
+		Terms:         p.terms,
+		Revision:      initialRevision,
+	}
+	res.record(eventCreated, at, creationChanges(res))
+	s.addReservation(res)
+	return res
+}
 
 func (a *app) createReservation(w http.ResponseWriter, r *http.Request) {
 	body, e := readBody(w, r, maxBodyBytes)
@@ -319,24 +338,13 @@ func (a *app) createReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, e)
 		return
 	}
-	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(rest), nil) {
+	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(), nil) {
 		writeError(w, tableUnavailable)
 		return
 	}
-	res := &Reservation{
-		ID:            st.newReservationID(),
-		Reference:     st.newReference(),
-		UserID:        user.ID,
-		RestaurantID:  rest.ID,
-		TableIDs:      p.tableIDs,
-		PartySize:     p.partySize,
-		Status:        statusConfirmed,
-		StartsAtLocal: p.local,
-		StartsAt:      p.startsAt,
-		CreatedAt:     time.Now().UTC().Truncate(time.Second),
-	}
-	st.addReservation(res)
-	resp, _ := json.Marshal(viewOf(res, rest))
+	res := st.newReservation(user, rest, p, stamp())
+	rest.Revision++
+	resp, _ := json.Marshal(viewOf(res))
 	st.idem[k] = &IdemRecord{idemKey: k, Body: canonical, Status: http.StatusCreated, Response: resp}
 	writeRaw(w, http.StatusCreated, resp)
 }
@@ -359,7 +367,7 @@ func (a *app) listReservations(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(mine, func(i, j int) bool { return mine[i].StartsAt.After(mine[j].StartsAt) })
 	out := []reservationView{}
 	for _, res := range mine {
-		out = append(out, viewOf(res, st.restaurantsByID[res.RestaurantID]))
+		out = append(out, viewOf(res))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"reservations": out})
 }
@@ -382,12 +390,12 @@ func (a *app) getReservation(w http.ResponseWriter, r *http.Request, reference s
 		writeError(w, e)
 		return
 	}
-	res, rest, e := ownReservation(st, user, reference)
+	res, _, e := ownReservation(st, user, reference)
 	if e != nil {
 		writeError(w, e)
 		return
 	}
-	writeJSON(w, http.StatusOK, viewOf(res, rest))
+	writeJSON(w, http.StatusOK, viewOf(res))
 }
 
 func (a *app) cancelReservation(w http.ResponseWriter, r *http.Request, reference string) {
@@ -405,22 +413,65 @@ func (a *app) cancelReservation(w http.ResponseWriter, r *http.Request, referenc
 		return
 	}
 	if res.Status == statusCancelled {
-		writeJSON(w, http.StatusOK, viewOf(res, rest))
+		writeJSON(w, http.StatusOK, viewOf(res))
 		return
 	}
-	if cutoffPassed(rest, res, time.Now()) {
+	if cutoffPassed(res, time.Now()) {
 		writeError(w, fail(http.StatusConflict, codeCutoffPassed, "the cancellation cutoff has passed"))
 		return
 	}
 	res.Status = statusCancelled
-	writeJSON(w, http.StatusOK, viewOf(res, rest))
+	res.Revision++
+	res.record(eventCancelled, stamp(), []Change{})
+	rest.Revision++
+	if sr := st.seriesByID[res.SeriesID]; sr != nil {
+		sr.Revision++ // retained, not an exception
+	}
+	writeJSON(w, http.StatusOK, viewOf(res))
 }
 
-// amend resolves a change to an existing booking against the ordinary rules,
-// without touching occupancy; the caller decides how occupancy is checked.
-func amend(rest *Restaurant, res *Reservation, f bookingFields) (placement, *apiError) {
+// checkExpectedRevision applies the optional expected_revision of an amendment:
+// invalid type or range is 422, a different revision is 409 stale_revision.
+func checkExpectedRevision(m map[string]any, res *Reservation) *apiError {
+	v, present := m["expected_revision"]
+	if !present {
+		return nil
+	}
+	n, ok := jsonInt(v)
+	if !ok || n < 1 {
+		return invalid("expected_revision must be a positive integer")
+	}
+	if n != int64(res.Revision) {
+		return fail(http.StatusConflict, codeStaleRevision, "the reservation has changed since that revision")
+	}
+	return nil
+}
+
+// checkEditable applies the state checks every amendment shares, in order:
+// expected revision, cancelled, accepted cutoff against the current start.
+func checkEditable(m map[string]any, res *Reservation, at time.Time) *apiError {
+	if e := checkExpectedRevision(m, res); e != nil {
+		return e
+	}
+	if res.Status == statusCancelled {
+		return fail(http.StatusConflict, codeCancelled, "a cancelled reservation cannot be changed")
+	}
+	if cutoffPassed(res, at) {
+		return fail(http.StatusConflict, codeCutoffPassed, "the amendment cutoff has passed")
+	}
+	return nil
+}
+
+// planAmendment resolves a requested change. It reports changed=false for a
+// no-op (every supplied value equals the current one, a reversed pair included),
+// which keeps the booking's terms; otherwise the result is validated in full
+// against the policy of the resulting start date. Occupancy is left to the caller.
+func planAmendment(rest *Restaurant, res *Reservation, f bookingFields) (bool, placement, *apiError) {
 	ids, lt, party := res.TableIDs, res.StartsAtLocal, res.PartySize
 	if f.tableIDs != nil {
+		if e := checkDistinct(f.tableIDs); e != nil {
+			return false, placement{}, e
+		}
 		ids = f.tableIDs
 	}
 	if f.startsAt != nil {
@@ -429,14 +480,24 @@ func amend(rest *Restaurant, res *Reservation, f bookingFields) (placement, *api
 	if f.partySize != nil {
 		party = *f.partySize
 	}
-	return resolvePlacement(rest, ids, lt, party)
+	if sameTableSet(ids, res.TableIDs) && lt == res.StartsAtLocal && party == res.PartySize {
+		return false, currentPlacement(res), nil
+	}
+	p, e := resolvePlacement(rest, ids, lt, party)
+	return e == nil, p, e
 }
 
-func apply(res *Reservation, p placement) {
+// applyAmendment replaces the booking's values and accepted terms together,
+// increments its revision once and records one changed entry.
+func applyAmendment(res *Reservation, p placement, at time.Time) {
+	oldIDs, oldLocal, oldParty := res.TableIDs, res.StartsAtLocal, res.PartySize
 	res.TableIDs = p.tableIDs
 	res.StartsAtLocal = p.local
 	res.StartsAt = p.startsAt
 	res.PartySize = p.partySize
+	res.Terms = p.terms
+	res.Revision++
+	res.record(eventChanged, at, amendmentChanges(oldIDs, oldLocal, oldParty, res))
 }
 
 func (a *app) patchReservation(w http.ResponseWriter, r *http.Request, reference string) {
@@ -463,12 +524,8 @@ func (a *app) patchReservation(w http.ResponseWriter, r *http.Request, reference
 		writeError(w, e)
 		return
 	}
-	if res.Status == statusCancelled {
-		writeError(w, fail(http.StatusConflict, codeCancelled, "a cancelled reservation cannot be changed"))
-		return
-	}
-	if cutoffPassed(rest, res, time.Now()) {
-		writeError(w, fail(http.StatusConflict, codeCutoffPassed, "the amendment cutoff has passed"))
+	if e := checkEditable(m, res, time.Now()); e != nil {
+		writeError(w, e)
 		return
 	}
 	f, e := parseBookingFields(m, false)
@@ -476,16 +533,25 @@ func (a *app) patchReservation(w http.ResponseWriter, r *http.Request, reference
 		writeError(w, e)
 		return
 	}
-	p, e := amend(rest, res, f)
+	changed, p, e := planAmendment(rest, res, f)
 	if e != nil {
 		writeError(w, e)
 		return
 	}
+	if !changed {
+		writeJSON(w, http.StatusOK, viewOf(res))
+		return
+	}
 	// The booking's own occupancy never blocks its move.
-	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(rest), map[string]bool{res.ID: true}) {
+	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(), map[string]bool{res.ID: true}) {
 		writeError(w, tableUnavailable)
 		return
 	}
-	apply(res, p)
-	writeJSON(w, http.StatusOK, viewOf(res, rest))
+	applyAmendment(res, p, stamp())
+	rest.Revision++
+	if sr := st.seriesByID[res.SeriesID]; sr != nil {
+		sr.markException(res.ID)
+		sr.Revision++
+	}
+	writeJSON(w, http.StatusOK, viewOf(res))
 }

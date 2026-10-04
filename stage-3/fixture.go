@@ -78,12 +78,15 @@ func identifier(o obj, key string) (string, *apiError) {
 	return id, nil
 }
 
-func parseRestaurant(v any) (*Restaurant, *apiError) {
+// parseRestaurant reads a fixture restaurant. With imported set it also reads
+// the stage-3 records an export carries (revision, published policies); exports
+// from earlier stages simply lack them.
+func parseRestaurant(v any, imported bool) (*Restaurant, *apiError) {
 	o, e := objectAt(v, "restaurant")
 	if e != nil {
 		return nil, e
 	}
-	r := &Restaurant{}
+	r := &Restaurant{Base: &Terms{}, Revision: initialRevision}
 	if r.ID, e = identifier(o, "id"); e != nil {
 		return nil, e
 	}
@@ -98,13 +101,13 @@ func parseRestaurant(v any) (*Restaurant, *apiError) {
 		return nil, invalid("timezone must be an IANA zone name")
 	}
 	r.Location = loc
-	if r.SlotMinutes, e = requiredInt(o, "slot_minutes", 1); e != nil {
+	if r.Base.SlotMinutes, e = requiredInt(o, "slot_minutes", 1); e != nil {
 		return nil, e
 	}
-	if r.DurationMinutes, e = requiredInt(o, "reservation_duration_minutes", 1); e != nil {
+	if r.Base.DurationMinutes, e = requiredInt(o, "reservation_duration_minutes", 1); e != nil {
 		return nil, e
 	}
-	if r.CutoffMinutes, e = requiredInt(o, "cancellation_cutoff_minutes", 0); e != nil {
+	if r.Base.CutoffMinutes, e = requiredInt(o, "cancellation_cutoff_minutes", 0); e != nil {
 		return nil, e
 	}
 	hours, e := arrayField(o, "opening_hours")
@@ -116,7 +119,7 @@ func parseRestaurant(v any) (*Restaurant, *apiError) {
 		if e != nil {
 			return nil, e
 		}
-		r.Hours = append(r.Hours, h)
+		r.Base.Hours = append(r.Base.Hours, h)
 	}
 	tables, e := arrayField(o, "tables")
 	if e != nil {
@@ -148,7 +151,64 @@ func parseRestaurant(v any) (*Restaurant, *apiError) {
 		}
 		r.Combinable = append(r.Combinable, p)
 	}
+	// Policy 0 is the fixture's own rules, table capacities included.
+	r.Base.Capacities = map[string]int{}
+	for _, t := range r.Tables {
+		r.Base.Capacities[t.ID] = t.Capacity
+	}
+	managers, e := arrayField(o, "manager_user_ids")
+	if e != nil {
+		return nil, e
+	}
+	for _, mv := range managers {
+		id, ok := mv.(string)
+		if !ok {
+			return nil, invalid("manager_user_ids must be strings")
+		}
+		r.Managers = append(r.Managers, id)
+	}
+	if imported {
+		if e := readImportedRestaurant(r, o); e != nil {
+			return nil, e
+		}
+	}
 	return r, nil
+}
+
+// readImportedRestaurant restores a stage-3 export's restaurant revision and
+// published policies, which must carry versions 1, 2, ... in publication order.
+func readImportedRestaurant(r *Restaurant, o obj) *apiError {
+	if _, present := o["revision"]; present {
+		rev, e := requiredInt(o, "revision", initialRevision)
+		if e != nil {
+			return e
+		}
+		r.Revision = rev
+	}
+	policies, e := arrayField(o, "policies")
+	if e != nil {
+		return e
+	}
+	for _, pv := range policies {
+		po, e := objectAt(pv, "policy")
+		if e != nil {
+			return e
+		}
+		p, e := parsePolicy(r, po)
+		if e != nil {
+			return e
+		}
+		version, e := requiredInt(po, "policy_version", 1)
+		if e != nil {
+			return e
+		}
+		if version != len(r.Policies)+1 {
+			return invalid("policy versions must be 1, 2, ... in publication order")
+		}
+		p.Terms.PolicyVersion = version
+		r.Policies = append(r.Policies, p)
+	}
+	return nil
 }
 
 // parseCombinablePair accepts exactly two distinct known table ids (stage 2).
@@ -223,9 +283,9 @@ func parseTable(v any) (Table, *apiError) {
 	return t, nil
 }
 
-func addRestaurants(st *State, v []any) *apiError {
+func addRestaurants(st *State, v []any, imported bool) *apiError {
 	for _, rv := range v {
-		r, e := parseRestaurant(rv)
+		r, e := parseRestaurant(rv, imported)
 		if e != nil {
 			return e
 		}
@@ -264,13 +324,15 @@ func addUser(st *State, o obj, passwordHash string) *apiError {
 }
 
 // addReservation validates a seeded or imported booking: the create-body fields
-// plus id, reference and user_id; status and created_at are optional.
-func addReservation(st *State, v any, now time.Time) *apiError {
+// plus id, reference and user_id; status and created_at are optional. A seeded
+// booking starts at revision 1 under policy 0 with a created history entry; with
+// imported set, a stage-3 export's revision, accepted terms and history are kept.
+func addReservation(st *State, v any, createdAt time.Time, imported bool) *apiError {
 	o, e := objectAt(v, "reservation")
 	if e != nil {
 		return e
 	}
-	res := &Reservation{Status: statusConfirmed, CreatedAt: now}
+	res := &Reservation{Status: statusConfirmed, CreatedAt: createdAt, Revision: initialRevision}
 	if res.ID, e = identifier(o, "id"); e != nil {
 		return e
 	}
@@ -360,8 +422,124 @@ func addReservation(st *State, v any, now time.Time) *apiError {
 	if st.reservationByRf[res.Reference] != nil {
 		return invalid("duplicate reservation reference " + res.Reference)
 	}
+	res.Terms = rest.Base
+	if imported {
+		if e := readImportedReservation(rest, res, o); e != nil {
+			return e
+		}
+	}
+	if res.History == nil {
+		res.History = []*HistoryEntry{{
+			Seq: 1, At: res.CreatedAt, Event: eventCreated, Changes: creationChanges(res),
+			Revision: initialRevision, Terms: res.Terms,
+		}}
+	}
 	st.addReservation(res)
 	return nil
+}
+
+// importedTerms resolves an exported accepted_terms object by its policy
+// version; policies are immutable, so the version identifies the snapshot.
+func importedTerms(rest *Restaurant, v any) (*Terms, *apiError) {
+	o, e := objectAt(v, "accepted_terms")
+	if e != nil {
+		return nil, e
+	}
+	version, e := requiredInt(o, "policy_version", 0)
+	if e != nil {
+		return nil, e
+	}
+	t := rest.termsByVersion(version)
+	if t == nil {
+		return nil, invalid("accepted_terms names an unknown policy version")
+	}
+	return t, nil
+}
+
+// readImportedReservation restores the stage-3 fields of an exported booking.
+func readImportedReservation(rest *Restaurant, res *Reservation, o obj) *apiError {
+	var e *apiError
+	if _, present := o["revision"]; present {
+		if res.Revision, e = requiredInt(o, "revision", initialRevision); e != nil {
+			return e
+		}
+	}
+	if tv, present := o["accepted_terms"]; present {
+		if res.Terms, e = importedTerms(rest, tv); e != nil {
+			return e
+		}
+	}
+	if _, present := o["history"]; !present {
+		return nil
+	}
+	entries, e := arrayField(o, "history")
+	if e != nil {
+		return e
+	}
+	res.History = []*HistoryEntry{}
+	for i, hv := range entries {
+		h, e := parseHistoryEntry(rest, hv)
+		if e != nil {
+			return e
+		}
+		if h.Seq != i+1 {
+			return invalid("history seq must start at 1 and increase by 1")
+		}
+		res.History = append(res.History, h)
+	}
+	if len(res.History) == 0 {
+		return invalid("history must contain the created entry")
+	}
+	return nil
+}
+
+func parseHistoryEntry(rest *Restaurant, v any) (*HistoryEntry, *apiError) {
+	o, e := objectAt(v, "history entry")
+	if e != nil {
+		return nil, e
+	}
+	h := &HistoryEntry{}
+	if h.Seq, e = requiredInt(o, "seq", 1); e != nil {
+		return nil, e
+	}
+	at, e := requiredString(o, "at")
+	if e != nil {
+		return nil, e
+	}
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return nil, invalid("history at must be RFC 3339")
+	}
+	h.At = t.UTC()
+	if h.Event, e = requiredString(o, "event"); e != nil {
+		return nil, e
+	}
+	if h.Event != eventCreated && h.Event != eventChanged && h.Event != eventCancelled {
+		return nil, invalid("unknown history event " + h.Event)
+	}
+	changes, e := arrayField(o, "changes")
+	if e != nil {
+		return nil, e
+	}
+	h.Changes = []Change{}
+	for _, cv := range changes {
+		co, e := objectAt(cv, "history change")
+		if e != nil {
+			return nil, e
+		}
+		field, e := requiredString(co, "field")
+		if e != nil {
+			return nil, e
+		}
+		h.Changes = append(h.Changes, Change{Field: field, From: co["from"], To: co["to"]})
+	}
+	if h.Revision, e = requiredInt(o, "revision", initialRevision); e != nil {
+		return nil, e
+	}
+	if h.Terms, e = importedTerms(rest, o["accepted_terms"]); e != nil {
+		return nil, e
+	}
+	return h, nil
 }
 
 // stateFromFixture builds the state POST /_test/reset installs (§4).
@@ -408,7 +586,7 @@ func stateFromFixture(fixture obj, now time.Time) (*State, *apiError) {
 	if e != nil {
 		return nil, e
 	}
-	if e := addRestaurants(st, restaurants); e != nil {
+	if e := addRestaurants(st, restaurants, false); e != nil {
 		return nil, e
 	}
 	reservations, e := arrayField(fixture, "reservations")
@@ -416,7 +594,7 @@ func stateFromFixture(fixture obj, now time.Time) (*State, *apiError) {
 		return nil, e
 	}
 	for _, rv := range reservations {
-		if e := addReservation(st, rv, now); e != nil {
+		if e := addReservation(st, rv, now, false); e != nil {
 			return nil, e
 		}
 	}

@@ -52,8 +52,9 @@ func parseMoves(m map[string]any) ([]moveItem, *apiError) {
 }
 
 type plannedMove struct {
-	res *Reservation
-	p   placement
+	res     *Reservation
+	p       placement
+	changed bool
 }
 
 func overlaps(aStart, aEnd, bStart, bEnd time.Time) bool {
@@ -96,8 +97,10 @@ func (a *app) moveReservations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Non-occupancy errors in input order; for one booking the cutoff comes first.
-	now := time.Now()
+	// Non-occupancy errors in input order. For one booking: expected revision,
+	// cancelled, the old accepted cutoff, then the fields under the resulting
+	// date's policy (individual PATCH semantics).
+	checkedAt := time.Now()
 	var rest *Restaurant
 	planned := make([]plannedMove, 0, len(items))
 	for _, it := range items {
@@ -112,12 +115,8 @@ func (a *app) moveReservations(w http.ResponseWriter, r *http.Request) {
 			writeError(w, invalid("all moves must belong to the same restaurant"))
 			return
 		}
-		if res.Status == statusCancelled {
-			writeError(w, fail(http.StatusConflict, codeCancelled, "a cancelled reservation cannot be moved"))
-			return
-		}
-		if cutoffPassed(rest, res, now) {
-			writeError(w, fail(http.StatusConflict, codeCutoffPassed, "the amendment cutoff has passed"))
+		if e := checkEditable(it.fields, res, checkedAt); e != nil {
+			writeError(w, e)
 			return
 		}
 		f, e := parseBookingFields(it.fields, false)
@@ -125,39 +124,57 @@ func (a *app) moveReservations(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		p, e := amend(rest, res, f)
+		changed, p, e := planAmendment(rest, res, f)
 		if e != nil {
 			writeError(w, e)
 			return
 		}
-		planned = append(planned, plannedMove{res, p})
+		planned = append(planned, plannedMove{res, p, changed})
 	}
 
 	// Occupancy: the resulting bookings must not overlap each other or any
-	// confirmed booking outside the batch. Listed bookings keep their own slots.
+	// confirmed booking outside the batch. Unchanged listed bookings keep their
+	// own slots and accepted durations.
 	listed := map[string]bool{}
 	for _, pm := range planned {
 		listed[pm.res.ID] = true
 	}
 	for i, pm := range planned {
-		start, end := pm.p.startsAt, pm.p.endsAt(rest)
+		start, end := pm.p.startsAt, pm.p.endsAt()
 		if st.setBusy(rest, pm.p.tableIDs, start, end, listed) {
 			writeError(w, tableUnavailable)
 			return
 		}
 		for _, other := range planned[:i] {
-			if sharesTable(other.p.tableIDs, pm.p.tableIDs) && overlaps(start, end, other.p.startsAt, other.p.endsAt(rest)) {
+			if sharesTable(other.p.tableIDs, pm.p.tableIDs) && overlaps(start, end, other.p.startsAt, other.p.endsAt()) {
 				writeError(w, tableUnavailable)
 				return
 			}
 		}
 	}
 
-	// Commit everything together, including the retry record.
+	// Commit everything together: one revision and one history entry per changed
+	// booking, the restaurant and each affected series once per batch.
+	at := stamp()
+	touched := map[*Series]bool{}
+	anyChanged := false
 	views := make([]reservationView, 0, len(planned))
 	for _, pm := range planned {
-		apply(pm.res, pm.p)
-		views = append(views, viewOf(pm.res, rest))
+		if pm.changed {
+			applyAmendment(pm.res, pm.p, at)
+			anyChanged = true
+			if sr := st.seriesByID[pm.res.SeriesID]; sr != nil {
+				sr.markException(pm.res.ID)
+				touched[sr] = true
+			}
+		}
+		views = append(views, viewOf(pm.res))
+	}
+	if anyChanged {
+		rest.Revision++
+	}
+	for sr := range touched {
+		sr.Revision++
 	}
 	resp, _ := json.Marshal(map[string]any{"reservations": views})
 	st.idem[k] = &IdemRecord{idemKey: k, Body: canonical, Status: http.StatusCreated, Response: resp}
