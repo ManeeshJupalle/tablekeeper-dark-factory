@@ -389,13 +389,13 @@
     showSignedIn();
     document.addEventListener('tk:session', showSignedIn);
 
+    // The form stays usable while signed in, so switching accounts is one step.
     function showSignedIn() {
       clear(status);
       const s = session();
-      if (!s) { form.hidden = false; return; }
-      form.hidden = true;
+      if (!s) return;
       status.append(el('div', { class: 'notice notice-success' }, [
-        el('p', {}, ['You are signed in as ', el('strong', { text: s.display_name || s.user_id }), '.']),
+        el('p', {}, ['You are signed in as ', el('strong', { text: s.display_name || s.user_id }), '. ', kind === 'signup' ? 'Creating another account will switch to it.' : 'Logging in below switches to that account.']),
         el('p', { class: 'reservation-actions' }, [
           el('a', { href: '/', class: 'btn btn-primary btn-small', text: 'Find a table' }),
           el('a', { href: '/lookup', class: 'btn btn-secondary btn-small', text: 'Look up a reservation' }),
@@ -412,6 +412,12 @@
       if (kind === 'signup') body.display_name = $('[data-testid="signup-display-name"]').value.trim();
       const submit = $('[data-testid="' + kind + '-submit"]');
       submit.disabled = true;
+      // While the request is in flight nobody is "signed in" yet: the header shows
+      // progress instead of a previous session, so a successful sign-in is only
+      // announced once the new session is actually stored.
+      const slot = $('#auth-slot');
+      clear(slot);
+      slot.append(el('span', { class: 'current-user', text: kind === 'signup' ? 'Creating account…' : 'Signing in…' }));
       try {
         const result = await api('POST', kind === 'signup' ? '/auth/signup' : '/auth/login', { body });
         if ((result.status === 201 || result.status === 200) && result.data && result.data.token) {
@@ -430,6 +436,7 @@
         messages.append(el('p', { class: 'notice notice-error', role: 'alert', 'data-testid': 'auth-error', text: 'We could not reach the server. Check your connection and try again.' }));
       } finally {
         submit.disabled = false;
+        renderHeader();
       }
     });
   }
