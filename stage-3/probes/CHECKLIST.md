@@ -1,6 +1,6 @@
-# Tablekeeper stage 2 - contract checklist (auditor)
+# Tablekeeper stage 3 - contract checklist (auditor)
 
-Part A keeps every stage-1 item (still in force). Part B adds the stage-2 items.
+Part A keeps every stage-1 item and Part B every stage-2 item (both still in force). Part C adds the stage-3 items.
 
 # Part A - stage 1
 
@@ -343,3 +343,284 @@ original responses. Both files contain only throwaway test credentials for fixtu
 235. **UI-25** A loading indicator exists while a search is pending (accepted signals: `aria-busy`, a testid containing `loading`, `role=status|progressbar`, a disabled search button, or visible text matching loading/searching/looking).
 236. **UI-26** Contrast and overall visual quality: **not automated** (judgement).
 237. **UI-27** Recovery across a full page reload: **not automated** (not required by the documents).
+
+# Part C - stage 3 additions
+
+Stage-3 fixture (`s3_fixture`): the stage-2 fixture plus users `u_mgr` and `u_mgr2`, restaurant
+`r_pol` (Europe/Berlin, slot 30, duration 90, cutoff 120, every day 18:00-23:00; tables `p_a`
+Arbour 2, `p_b` Bench 4, `p_c` Cellar 6; `combinable [["p_b","p_a"]]`; `manager_user_ids
+["u_mgr"]`), restaurant `r_pol2` (one table `q_1`, manager `u_mgr2`), and `u_mgr` as manager of
+`r_zulu` for cutoff timing. Dates: `DAY(n)` = THU + n days. Restaurant revision is read from
+`GET /restaurants/{id}` field `revision` per the coordinator's decision (starts at 1 at reset or
+import; +1 per successful state-changing operation on that restaurant; never by failures or
+replays).
+
+Every reservation body in every group (stage 1 and 2 included) is checked by the shared validator:
+it must carry a positive integer `revision` and `accepted_terms` with exactly the keys
+`policy_version, slot_minutes, reservation_duration_minutes, cancellation_cutoff_minutes,
+opening_hours, capacities` (no `effective_from`), and `ends_at - starts_at` must equal the accepted
+duration. CXL-1 now expects cancel to return the booking with `revision + 1` (the one stage-2 check
+that stage 3 legitimately changes).
+
+## XPL - availability explanations
+
+238. **XPL-0** `explain=true` is 200 and every slot carries an `explain` list.
+239. **XPL-1** Every table of the restaurant appears exactly once per slot, in fixture order.
+240. **XPL-2** Both rules are reported for every table, `capacity` then `no_overlap`, each `holds` a boolean; no rule omitted.
+241. **XPL-3** `available` is a boolean and is true exactly when both rules hold.
+242. **XPL-4** The table ids whose `available` is true equal `available_table_ids`, in the same order, on every slot.
+243. **XPL-5** `policy_version` is the integer 0 for every table before any publication.
+244. **XPL-6** Exact rule values: party 3 fails `capacity` on `p_a` (2); 19:00 bookings fail `no_overlap` at 18:00, 19:00 and 20:00 and hold at 20:30 (half-open); a table excluded by both reports both false.
+245. **XPL-7** Without `explain` no slot carries an `explain` key and the response is otherwise identical to the explained one (stage 1/2 shape kept, including `available_options`).
+246. **XPL-8** `explain` values `false`, `1`, empty, `TRUE`, `True`, `yes`, `0`, `true ` (trailing space) are each 422 `validation_failed`.
+247. **XPL-9** A closed day with `explain=true` still returns `"slots": []`.
+248. **XPL-10** A party no table seats (7): every slot still appears with `available_table_ids []` and a full explain whose capacity rule is false for every table.
+249. **XPL-11** Under a published policy `explain` shows that policy's `policy_version` and its capacities decide the capacity rule (`p_a` raised to 8 seats party 3).
+250. **XPL-12** The day before that policy's effective date still explains `policy_version 0`.
+251. **XPL-13** Unknown query parameters next to `explain` are ignored.
+
+## POL - publishing policies
+
+252. **POL-1** Publish without a token is 401 `unauthenticated`.
+253. **POL-2** Publish for an unknown restaurant is 404 `not_found`.
+254. **POL-3a** An authenticated diner (non-manager) is 403 `forbidden`.
+255. **POL-3b** The manager of another restaurant is 403 `forbidden` here.
+256. **POL-3c** A restaurant without `manager_user_ids` (default `[]`) refuses everyone with 403.
+257. **POL-4a/b/c** Missing key 400 `missing_idempotency_key`; empty key 400; 256-character key 422 `validation_failed`.
+258. **POL-5** `GET /restaurants/{id}/policies` is public and exactly `{"policies": []}` before any publication; **POL-5b** unknown restaurant is 404.
+259. **POL-6** First publication is 201 with every supplied field echoed plus integer `policy_version 1`.
+260. **POL-7** Replay (same key, same body) is 200 with an identical body.
+261. **POL-8a/b** Same key with a different body is 409 `idempotency_key_reuse`, also when the new body is itself invalid.
+262. **POL-9** Each of these is 422 `validation_failed`: each of the six fields missing; `effective_from` `2026-02-30`, `2026-9-1`, a datetime, empty, free text, `20261231`, `2026-13-01`; `slot_minutes` 0, 1441, -30, 30.5, true; duration 0, 1441, -1, 90.5, true; cutoff -1, 10081, 0.5, true, false; opening hours with a duplicate weekday, crossing midnight, opens equal to closes, unknown weekday, hour 25, minute 60; capacities missing a table, naming an extra table, naming another restaurant's table, capacity 0, 101, -1, 2.5, true.
+263. **POL-10** Wrong JSON types (`slot_minutes` as a string, `capacities` as a list, `opening_hours` as an object, `effective_from` as a number) are refused with 400 `malformed_request` or 422 `validation_failed` (the documents give both rules; either is accepted).
+264. **POL-11** Failed publications and the replay allocate no version and change no state (one policy listed; availability unchanged).
+265. **POL-12** The next successful publication is version 2.
+266. **POL-13** Versions are per restaurant: the first `r_pol2` policy is version 1.
+267. **POL-14** Unknown fields are ignored (201, version 3).
+268. **POL-15** `GET` policies without a token lists versions 1, 2, 3 in publication order, each equal to its 201 body; policy 0 is omitted.
+269. **POL-16** `r_pol2` lists only its own policy.
+270. **POL-17** `GET /restaurants/r_pol` still returns the original fixture configuration.
+271. **POL-18** Boundaries accepted with consecutive versions: `slot_minutes` 1 and 1440, duration 1 and 1440, cutoff 0 and 10080, capacities 1 and 100, hours 00:00-23:59, no opening hours at all, an effective date in the past.
+272. **POL-19** Earlier policies are immutable: versions 1-3 still equal their 201 bodies after later publications.
+273. **POL-20** A policy with no opening hours closes every day it selects.
+
+## PSEL - policy selection
+
+274. **PSEL-1** A policy published later with a past effective date selects for THU (greatest `effective_from` not later than the date): grid 30, `p_a` capacity 1 excludes party 2; explain shows version 2.
+275. **PSEL-2** On its effective date version 1's grid (60), duration (120), hours (17-22) and capacities (`p_a` 3) decide the slot list and tables.
+276. **PSEL-3** The day before an effective date still uses the older policy (publication order differs from date order; a future policy does not affect today).
+277. **PSEL-4a/b/c** Under version 1: 19:30 is 422 `not_on_slot_grid`; 21:00 (+120 > 22:00) is 422 `outside_opening_hours`; 16:00 is 422 `outside_opening_hours`.
+278. **PSEL-5** Party 3 on `p_a` at 17:00 under version 1 is 201, ends 120 minutes later, revision 1; **PSEL-5b** its `accepted_terms` equal version 1's rules without `effective_from`.
+279. **PSEL-6a/b** Party 2 on `p_a` on THU (version 2 capacity 1) is 422 `party_exceeds_capacity`; a THU booking accepts version 2's terms.
+280. **PSEL-7** Two policies with the same effective date: the greater `policy_version` decides (30-minute end); **PSEL-7b** explain shows it.
+281. **PSEL-8a/b/c** A weekday absent from the selected policy's opening hours is closed (`slots []`, booking 422 `outside_opening_hours`); the listed weekday stays open.
+282. **PSEL-9a/b/c** Publishing a shorter duration leaves an existing booking's body, `ends_at`, revision, terms, history and decision unchanged, and its own 90-minute occupancy still blocks under the 30-minute policy (free at 18:30 and 20:30).
+283. **PSEL-10a/b/c** A booking under a 30-minute policy ends 30 minutes later; a later 120-minute policy keeps that end, and the new 120-minute slots overlap it correctly (blocked 19:00-20:30, free 18:00, 18:30, 21:00).
+284. **PSEL-11** The restaurant detail still returns the fixture configuration after seven publications.
+
+## TRM - accepted terms and revision
+
+285. **TRM-1** A seeded booking has revision 1 and policy-0 terms equal to the fixture rules.
+286. **TRM-2** A new booking has revision 1 and exactly the six policy-0 fields; **TRM-2b** list entries carry them.
+287. **TRM-3** A publication changes no existing booking.
+288. **TRM-4/4b** A real amendment to a version-1 date: 200, revision 2, 120-minute end, version 1 terms (the resulting date's policy).
+289. **TRM-5/5b** Amending back to a policy-0 date: revision 3, 90-minute end, policy-0 terms.
+290. **TRM-6** Replaying the creating key returns the original body (revision 1, original terms) after amendments.
+291. **TRM-7** A no-op amendment (all three fields re-sent) is 200, retains body, revision and terms, and records no history.
+292. **TRM-7b** A no-op amendment after a new policy for its date still retains the old terms and end.
+293. **TRM-8/8b** A real amendment on the same date adopts the new same-date policy: revision 4, 60-minute end, version 2 terms.
+294. **TRM-9a/b/c/d** Resulting fields are validated against the resulting date's policy (grid, closing, capacity: each 422 with its code) and failed amendments change nothing (body, history, availability).
+295. **TRM-10a/b/c** A pair's capacity is the sum of the selected policy's capacities: party 3 on a 1+1 pair is 422, party 2 is 201 with version 3 terms, moving a party-5 pair onto a version-3 date is 422 `party_exceeds_capacity`.
+296. **TRM-11** A reversed pair names the same set: 200 no-op, revision unchanged, no history.
+297. **TRM-12/12b** Cancel increments the revision once; a repeated cancel returns the same body.
+298. **TRM-13** A no-op amendment of a cancelled booking is 409 `reservation_cancelled`.
+299. **TRM-14a/b/c/d** Cutoff uses accepted terms: a booking accepted under cutoff 60 refuses amendment, cancel and even a no-op amendment within 60 minutes (409 `cutoff_passed`) although the newest policy's cutoff is 0; a booking made under the cutoff-0 policy accepts cutoff 0.
+300. **TRM-15a/b/c** A booking accepted under cutoff 60 can be amended 68 minutes ahead although the newest policy says 600; it then adopts cutoff 600 (version 2) and its cancel is refused.
+301. **TRM-16** A booking accepted with cutoff 0 can be cancelled 45 minutes ahead although the newest policy says 600.
+302. **TRM-17/17b** An amendment onto a taken table is 409 `table_unavailable` and changes nothing (body, revision, history, occupancy).
+
+## XRV - expected_revision
+
+303. **XRV-1** A matching `expected_revision` succeeds (200, revision 2).
+304. **XRV-2** A differing positive value is 409 `stale_revision`.
+305. **XRV-3/4/4b** Stale is reported before field validation (invalid party), grid validation and resource checks (unknown table).
+306. **XRV-5** Stale attempts change nothing.
+307. **XRV-6/6b** Stale is reported before the cutoff check; a matching revision within the cutoff is 409 `cutoff_passed`.
+308. **XRV-7** `expected_revision` 0, -1, true, false, a string, 1.5, a list, an object are each 422 `validation_failed`; **XRV-7b** they change nothing.
+309. **XRV-8** Omission keeps stage-1 semantics.
+310. **XRV-9** A matching value on a no-op is 200 and the revision stays.
+311. **XRV-10** Unrelated unknown fields remain ignored next to `expected_revision`.
+312. **XRV-11** 12 concurrent real amendments with `expected_revision 1`: exactly one 200, eleven 409 `stale_revision`, final revision 2, two history entries.
+313. **XRV-12/12b** 12 concurrent real amendments without it: all 200 with revisions exactly 2..13, 13 history entries with revisions 1..13, and the final state equals the last entry's result.
+
+## HIS - history and decision
+
+314. **HIS-1** A seeded booking has one `created` entry (seq 1, revision 1, policy-0 terms, three fields from null).
+315. **HIS-2** History is `{reference, entries}`; `created` names `table_id`, `starts_at_local`, `party_size` in that order, each `from: null`.
+316. **HIS-3** Each entry carries the resulting `revision` and complete `accepted_terms`.
+317. **HIS-4** A party change records one `changed` entry naming only `party_size` with from and to.
+318. **HIS-5** Changing all three records them in the order `table_id`, `starts_at_local`, `party_size`.
+319. **HIS-6** Re-sending unchanged fields records only the changed one.
+320. **HIS-7** A no-op PATCH records no entry; **HIS-8** failed PATCHes record none; **HIS-9** replaying the creating request records none; **HIS-10** a policy publication changes no history.
+321. **HIS-11** An amendment under a new policy records the new terms; earlier entries keep the old terms.
+322. **HIS-12** Cancel records `cancelled` with empty `changes` and the incremented revision.
+323. **HIS-13** Nothing follows `cancelled` (repeated cancel and refused PATCH add nothing); a cancelled booking still has history.
+324. **HIS-14** `seq` runs 1..n by 1; `at` is RFC 3339 with offset and non-decreasing; entry revisions run 1..n.
+325. **HIS-15a/b/c/d** History is 404 `not_found` for another user, without a token (not 401), with an unknown token, and for an unknown reference.
+326. **HIS-16** Decision returns exactly `reference`, `revision`, `accepted_terms` of the current booking, including after cancellation.
+327. **HIS-17a/b/c** Decision is 404 for another user, without a token (not 401), and for an unknown reference.
+328. **HIS-18** Decision of a seeded booking: revision 1, policy-0 terms.
+329. **HIS-19** A batch records exactly one `changed` entry per changed booking and none for a no-op item.
+330. **HIS-20** The last entry's revision equals the booking's current revision.
+
+## CHS - combined-table history
+
+331. **CHS-1** Pair creation records `table_ids` from null to the pair in declared order (sent reversed), instead of `table_id`.
+332. **CHS-2** Single to pair records `table_ids` with complete before/after lists in declared order.
+333. **CHS-3** Pair to pair records `table_ids`.
+334. **CHS-4** Pair to single records `table_ids` (`["c_b","c_a"]` to `["c_d"]`).
+335. **CHS-5** Single to single keeps `table_id`.
+336. **CHS-6** Re-sending the pair in either order is a no-op (revision unchanged, no entry).
+337. **CHS-7** A pair's time change sent with the reversed pair records only `starts_at_local`.
+338. **CHS-8** A batch move from a single to a pair records `table_ids`.
+339. **CHS-9** The combined-table histories are well formed.
+
+## SER - recurring reservations: adoption
+
+340. **SER-1** Adoption is 201 with `series_id`, `revision 1`, `interval_weeks` and all `count` occurrences in index order, `exception false`.
+341. **SER-2** Occurrence 0 is the anchor: same reference and unchanged reservation (revision, `created_at`, terms).
+342. **SER-3** The anchor's history is unchanged by adoption.
+343. **SER-4** Occurrences have distinct references, start on anchor date + i x 7 days at the same clock time, use the anchor's table and party, are confirmed with revision 1 and their own date's (policy-0) terms.
+344. **SER-5** They appear in `GET /reservations`; **SER-6** they occupy their table; **SER-7** each generated one has an ordinary history with one `created` entry.
+345. **SER-8** `GET /series/{id}` returns the same shape with current states; **SER-8b/c/d** another user, no token and an unknown id are 404 `not_found`.
+346. **SER-9** A replay after a later change returns 200 with the original series response; **SER-9b** it changes no counter (series and restaurant revision); **SER-9c** `GET /series` shows the current state.
+347. **SER-10a/b** Adopting the same anchor again with a new key, or adopting a generated occurrence, is 409 `already_in_series`.
+348. **SER-11** `count` 1, 13, 0, -2, true, a string, 2.5 and `interval_weeks` 0, 5, true, a string, 1.5, and each missing field, are 422 `validation_failed`.
+349. **SER-12a/b/c/d** No token 401; missing key 400; 256-character key 422; unparseable body 400.
+350. **SER-13a/b** Unknown anchor and another owner's anchor are 404 `not_found`.
+351. **SER-14** A cancelled anchor is 409 `reservation_cancelled`.
+352. **SER-15** An anchor within its accepted cutoff is 409 `cutoff_passed`.
+353. **SER-16** After all refusals the anchor was never claimed; unknown fields are ignored (201).
+354. **SER-17/18** `count 12` with `interval_weeks 4`: 12 occurrences 28 days apart, distinct references.
+
+## SERX - recurring reservations: policies, failures, DST
+
+355. **SERX-1/1b** Each occurrence selects its own date's policy (versions 0, 0, 1, 1; durations 90, 90, 60, 60; terms).
+356. **SERX-2** An occurrence on a weekday its policy closes fails the whole adoption with 422 `outside_opening_hours`.
+357. **SERX-3** Nothing survives a failed adoption (anchor, its history, reservation list, restaurant revision).
+358. **SERX-4** The failed key is reusable with another body and the anchor stays adoptable.
+359. **SERX-5/6** The first failing occurrence in index order decides the code (409 conflict at index 1 before a closed day at index 2; 422 closed day at index 1 before a conflict at index 2).
+360. **SERX-7/8/9** An occupancy conflict on occurrence 3 is 409 `table_unavailable`; no reservation, occupancy, history or counter survives; the same key with a different body is then a first use.
+361. **SERX-10** An occurrence ending after its policy's closing is 422 `outside_opening_hours`.
+362. **SERX-11** An occurrence off its policy's grid is 422 `not_on_slot_grid`.
+363. **SERX-12** An occurrence above its policy's capacity is 422 `party_exceeds_capacity`.
+364. **SERX-13/14** Weekly occurrences across the autumn and spring transitions keep the local clock time and take the new offset.
+365. **SERX-15/15b** An occurrence at a nonexistent local time rejects the whole adoption with 422 `invalid_local_time`, leaving nothing behind.
+366. **SERX-16** An occurrence at a repeated local time resolves to the first occurrence and ends 90 absolute minutes later.
+
+## SRV - series revision and exceptions
+
+367. **SRV-1** A real PATCH on an occurrence marks it `exception true` and increments the series revision once.
+368. **SRV-2** Patching it back keeps `exception true` and increments again.
+369. **SRV-3/4** A no-op or failed PATCH changes neither.
+370. **SRV-5** Cancelling an occurrence increments the series revision once, keeps it in the series as cancelled, without marking an exception.
+371. **SRV-6** A repeated cancel changes nothing.
+372. **SRV-7** Cancelling the anchor does not cancel its siblings.
+373. **SRV-8** A batch changing two occurrences increments the series revision once and marks both.
+374. **SRV-9** A failed batch changes no series revision, flag or restaurant revision.
+375. **SRV-10** Moving an occurrence to another date keeps its index and reference.
+376. **SRV-11** The adoption replay returns the original response and changes no counter.
+
+## CMV3 - collective moves under policies and agreements
+
+377. **CMV3-1** A real batch change adopts the resulting date's policy (terms, end, revision, one history entry).
+378. **CMV3-2** A batch move off the resulting policy's grid is 422 `not_on_slot_grid`.
+379. **CMV3-3** A batch item within its accepted cutoff is 409 `cutoff_passed`.
+380. **CMV3-4/4b** A stale per-move `expected_revision` is 409 `stale_revision`, before that item's validation.
+381. **CMV3-5** Per-move `expected_revision` 0, true, a string, -1, 1.5 are 422 `validation_failed`.
+382. **CMV3-6/7** A batch with one failing item is refused with that item's code and changes no booking, revision, history, exception flag, series revision or restaurant revision.
+383. **CMV3-8** The failed batch's key is reusable.
+384. **CMV3-9/10** In a successful batch each changed booking gains exactly one revision and one `changed` entry; the no-op item keeps body, terms and history.
+385. **CMV3-11** The restaurant revision increases exactly once for the batch.
+386. **CMV3-12** The affected series revision increases once and the changed occurrence becomes a permanent exception.
+387. **CMV3-13** The replay is 200 with the original body and changes nothing.
+
+## RREV - restaurant revision (coordinator's definition)
+
+388. **RREV-1** After reset every restaurant detail carries integer `revision 1`.
+389. **RREV-2..18** +1 for a booking, a real amendment, a policy, an adoption of 4 occurrences (once), a batch of three changes (once) and a cancel; +0 for a booking replay, a refused booking, a no-op amendment, a failed amendment, a policy replay, a failed policy, an adoption replay, a failed adoption, a batch replay, a failed batch and a repeated cancel.
+390. **RREV-19** Other restaurants are unaffected.
+
+## UPG3 - upgrade from stage-1 and stage-2 exports
+
+Fixtures: `stage1_export.json` (captured from the accepted stage-1 image 797afdd) and
+`stage2_export.json` (captured from the accepted stage-2 image cbafad2: seeded pair, seeded
+cancelled single, a signed-up user, a pair, a single, a cancelled booking, a lost-response key, a
+failed key and a batch receipt), each with an `_expected.json` holding tokens, keys, bodies and
+original responses. Throwaway probe credentials only.
+
+391. **UPG3-1** Each genuine export imports with 204.
+392. **UPG3-2** The old session token still works.
+393. **UPG3-3** Every imported booking has revision 1 and policy-0 terms equal to the imported restaurant's rules.
+394. **UPG3-4** Identities, references, statuses and timestamps are unchanged.
+395. **UPG3-5** Every imported booking has a well-formed history starting with `created`.
+396. **UPG3-6** Decision works for every imported booking.
+397. **UPG3-7** The policies list is empty and the restaurant revision is 1.
+398. **UPG3-8** An imported restaurant has no managers: publication is 403.
+399. **UPG3-9/9b** Password login and the old signed-up session work.
+400. **UPG3-10/11** Stage-1 receipts (booking and batch) replay with exactly their original bodies; **UPG3-11b** a failed stage-1 key is a first use.
+401. **UPG3-12** An imported stage-1 booking can be adopted.
+402. **UPG3-13a-e** Stage-2 receipts (pair, single, lost-response, later-cancelled booking, batch) replay with exactly their original bodies.
+403. **UPG3-14/15** A failed stage-2 key is a first use; a stage-2 key with a different body is 409.
+404. **UPG3-16/16b** An imported seeded pair can be adopted; the generated occurrence holds the pair and its `created` entry records `table_ids` in declared order.
+405. **UPG3-17/17b** An imported cancelled seed stays cancelled and cannot be adopted (409).
+406. **UPG3-18** Reset after an upgrade import clears it.
+
+## RT3 - stage-3 export and import
+
+407. **RT3-1** Export after policies, amendments, a cancel, a series with an exception, a batch and a failed key is 200 with the required envelope.
+408. **RT3-2** Import of that export after further mutations is 204.
+409. **RT3-3** Reservation list, every history, every decision, the series and the policies list are identical to the pre-export state.
+410. **RT3-4a-d** Booking, policy, series and batch replays return their original bodies.
+411. **RT3-5/5b** Post-export bookings and accounts are gone.
+412. **RT3-6** A key that failed before export is a first use.
+413. **RT3-7** Importing again restores the identical state without duplicates.
+414. **RT3-8** The next publication after import is version 3 (the discarded post-export policy leaked no version).
+415. **RT3-9** Reset clears imported stage-3 state.
+
+## CON3 - concurrency
+
+416. **CON3-1** 50 in-flight mixed requests (6 publications, 15 racing bookings, 10 guarded amendments, 8 adoptions, 3 batches, 8 reads): no exception, no 5xx.
+417. **CON3-2** Every concurrent read is consistent (200, well-formed entries, no table in two overlapping confirmed bookings).
+418. **CON3-3** Six concurrent publications get versions exactly 1..6, listed contiguously.
+419. **CON3-4** Five racing bookings per table: exactly one 201, the rest 409 `table_unavailable`.
+420. **CON3-5** Two concurrent amendments with `expected_revision 1` per booking: exactly one succeeds, the other is 409 `stale_revision`; revision equals history length.
+421. **CON3-6** Stale amendments are 409 `stale_revision` under load.
+422. **CON3-7** Three concurrent adoptions of one anchor with different keys: exactly one 201, two 409 `already_in_series`.
+423. **CON3-8/9** The other concurrent adoptions and batches all succeed.
+424. **CON3-10** Afterwards no table is in two overlapping confirmed bookings.
+425. **CON3-11** Every booking's revision equals its history length and its last entry's revision.
+426. **CON3-12** 12 identical concurrent adoptions with one key: exactly one 201, eleven 200 identical.
+
+## UI-POL - stage-2 screens with stage-3 policies (browser)
+
+427. **UI-P1** With a published policy the grid has one cell per table per policy slot (17:00, 18:00, 19:00, 20:00) and `data-available` matches `GET /availability`.
+428. **UI-P2** No cell exists for a time the policy's grid does not offer.
+429. **UI-P3/3b** The policy's raised capacity offers `p_a` to a party of 3; another diner's booking makes the overlapping policy slots unavailable.
+430. **UI-P4** The declared pair cell uses combinable order and is available under the policy's capacities.
+431. **UI-P5** The booking form names the label and the policy slot time; party size is pre-filled.
+432. **UI-P6/6b** The confirmation reference is exactly the API reference; the booking accepted version 1 with a 120-minute end.
+433. **UI-P7** Lookup shows `confirmed` and the table label.
+434. **UI-P8** No horizontal scrolling at 375 px with the policy grid.
+435. **UI-P9/9b** A lost response under the policy shows `booking-uncertain`; the retry reuses key and body, recovers the original reference, and exactly one booking exists.
+436. **UI-P10** A day the selected policy closes shows `no-slots` instead of the grid.
+
+## Not automated (stage 3)
+
+437. **N3-1** The exact cutoff instant (`now == starts_at - accepted cutoff`) is a single instant; probes test about 12 minutes either side.
+438. **N3-2** Restaurant revision after a stage-3 export/import round trip: the coordinator's definition says it starts at 1 at import, but §10 also says state is preserved; not asserted.
+439. **N3-3** Whether an all-no-op batch counts as a restaurant revision change: not stated; not asserted.
+440. **N3-4** Ordering between `stale_revision` and `reservation_cancelled` on a cancelled booking: not stated; not asserted.
+441. **N3-5** A huge positive `expected_revision` (for example 2^63): the documents give no upper range, so neither 409 nor 422 is asserted.
+442. **N3-6** Wrong JSON types inside a policy body: accepted as 400 or 422 (POL-10) because §5 and stage 3 give different rules.
+443. **N3-7** The order of entries in a policy's `opening_hours` echo and in `accepted_terms`: compared order-insensitively by weekday.

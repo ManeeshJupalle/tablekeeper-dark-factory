@@ -1,15 +1,15 @@
-# Tablekeeper stage 2 - auditor probes
+# Tablekeeper stage 3 - auditor probes
 
-Black-box probes derived from the stage-1 and stage-2 requirements alone. They never read
-the implementation. `CHECKLIST.md` lists every contract item (Part A: stage 1, still in force;
-Part B: stage 2) with the probe id that covers it.
+Black-box probes derived from the stage-1, stage-2 and stage-3 requirements alone. They never read
+the implementation. `CHECKLIST.md` lists every contract item (Part A: stage 1; Part B: stage 2; Part C: stage 3; all
+in force) with the probe id that covers it.
 
 Two runners:
 
 | Runner | What it covers | Dependencies |
 |---|---|---|
-| `run_probes.py` | HTTP contract: all stage-1 groups plus stage-2 combined tables, idempotency, moves, concurrency and the stage-1-to-stage-2 upgrade | Python 3.11+, standard library only |
-| `run_browser_probes.py` | The four screens, data-testid contract, out-of-order / 409 / lost-response recovery, upgrade in the browser, viewport and focus rules | Python 3.11+, Playwright for Python with Chromium |
+| `run_probes.py` | HTTP contract: all stage-1 and stage-2 groups, plus stage-3 explanations, policies and selection, accepted terms and revisions, `expected_revision`, history and decision, recurring series, collective moves under policies, restaurant revision, upgrade from genuine stage-1 and stage-2 exports, stage-3 round trip and concurrency | Python 3.11+, standard library only |
+| `run_browser_probes.py` | The four screens, data-testid contract, out-of-order / 409 / lost-response recovery, upgrade in the browser, viewport and focus rules, and the same screens driven by a published stage-3 policy (UI-POL) | Python 3.11+, Playwright for Python with Chromium |
 
 ## Install (browser runner only)
 
@@ -21,7 +21,7 @@ The HTTP runner needs nothing installed.
 
 ## Run
 
-Start the stage-2 service, then from this directory:
+Start the stage-3 service, then from this directory:
 
 ```sh
 python3 run_probes.py --base-url http://127.0.0.1:8080
@@ -64,6 +64,22 @@ dropping the response, or dropping the request before it reaches the server.
 Timeouts are 5 s per request and action, 10 s for `/_test/reset`, `/_test/import` and
 `/_test/export`. Concurrency groups fire 17 to 24 simultaneous requests, within the 50 in-flight
 limit.
+
+## Stage-3 fixtures and conventions
+
+Stage-3 groups add restaurant `r_pol` (tables Arbour, Bench, Cellar; combinable Bench+Arbour;
+manager `u_mgr`), restaurant `r_pol2` (manager `u_mgr2`) and make `u_mgr` a manager of `r_zulu` for
+cutoff timing. Policies are published through the API inside each group. The restaurant revision
+is read from the `revision` field of `GET /restaurants/{id}`, as the coordinator defined it.
+DST series probes use the European transitions of next calendar year so they never fall in the
+past.
+
+`fixtures/stage2_export.json` is a genuine `GET /_test/export` captured from the accepted stage-2
+image (revision cbafad2) after seeding a pair and a cancelled single, signing up a user, booking a
+pair, a single and a later-cancelled table, recording a lost-response key, failing one key and
+running a batch. `fixtures/stage2_export_expected.json` records the tokens, keys, bodies and
+original responses. The UPG3 group imports both the stage-1 and the stage-2 export into the
+stage-3 service. These files hold only throwaway probe credentials.
 
 ## Known limits
 

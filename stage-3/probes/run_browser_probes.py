@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Tablekeeper stage 2 - browser probes (auditor seat).
+"""Tablekeeper stage 3 - browser probes (auditor seat).
+
+The stage-2 screen groups are kept unchanged; UI-POL drives the same screens with a published
+stage-3 booking policy (policy-driven grid, capacities, duration, closed days, recovery).
 
 Usage:
     python3 run_browser_probes.py [--base-url http://127.0.0.1:8080] [--only GROUP,GROUP]
@@ -143,6 +146,10 @@ def click_unavailable(page, testid):
     except PWTimeout:
         pass
     time.sleep(0.5)
+
+
+def DAY_OF(n):
+    return THU + dt.timedelta(days=n)
 
 
 def cell(table_ids, hhmm):
@@ -573,6 +580,116 @@ def g_upgrade_in_browser():
     ctx.close()
 
 
+@group("UI-POL")
+def g_policy_screens():
+    """Stage 3: the stage-2 screens with a published policy that changes the grid, capacities and duration."""
+    reset(rp.s3_fixture())
+    mgr = rp.login3("mgr")
+    hana = login("hana")
+    P = rp.must_publish(mgr, rp.policy(THU, slot=60, dur=120, oh=rp.hours(rp.ALL_DAYS, "17:00", "22:00"),
+                                       caps={"p_a": 3, "p_b": 4, "p_c": 6}))
+    rp.must_book(login("ravi"), "r_pol", "p_c", T(THU, "19:00"), 2)
+    api = avail("r_pol", THU, 3)
+    ctx, page = new_page()
+    ui_login(page, "hana@probe.test", "hana-secret-9")
+    ok = ui_search(page, "r_pol", THU, 3)
+    probs = []
+    for s in api.json["slots"]:
+        hh = hhmm_of(s["starts_at_local"])
+        for t in ("p_a", "p_b", "p_c"):
+            loc = tid(page, cell([t], hh))
+            exp = "true" if t in s["available_table_ids"] else "false"
+            if loc.count() != 1:
+                probs.append("%s count=%d" % (cell([t], hh), loc.count()))
+            elif loc.first.get_attribute("data-available") != exp:
+                probs.append("%s data-available=%r expected %s" % (cell([t], hh), loc.first.get_attribute("data-available"), exp))
+    check("UI-P1", "with a published policy the grid has one cell per table per policy slot and data-available matches GET /availability",
+          ok and [hhmm_of(s["starts_at_local"]) for s in api.json["slots"]] == ["17:00", "18:00", "19:00", "20:00"] and not probs, "; ".join(probs[:6]))
+    check("UI-P2", "no cell exists for a time the policy's 60-minute grid does not offer (17:30, 18:30)",
+          count(page, cell(["p_a"], "17:30")) == 0 and count(page, cell(["p_b"], "18:30")) == 0, "")
+    check("UI-P3", "p_a is offered to a party of 3 because the policy raises its capacity to 3",
+          tid(page, cell(["p_a"], "17:00")).first.get_attribute("data-available") == "true", "")
+    check("UI-P3b", "a table booked by another diner is unavailable at the overlapping policy slots (p_c 18:00 and 19:00 false, 17:00 true)",
+          [tid(page, cell(["p_c"], h)).first.get_attribute("data-available") for h in ("17:00", "18:00", "19:00")] == ["true", "false", "false"], "")
+    pair = tid(page, cell(["p_b", "p_a"], "17:00"))
+    check("UI-P4", "the declared pair cell uses combinable order and is available (policy capacities 4 + 3)",
+          pair.count() == 1 and pair.first.get_attribute("data-available") == "true" and count(page, cell(["p_a", "p_b"], "17:00")) == 0, "")
+    tid(page, cell(["p_a"], "17:00")).first.click()
+    wait_visible(page, "booking-form")
+    summ = text(page, "booking-summary") or ""
+    check("UI-P5", "the booking form names the table label and the policy slot time; party size is pre-filled", "Arbour" in summ and "17:00" in summ and tid(page, "booking-party-size").first.input_value() == "3", repr(summ))
+    tid(page, "booking-submit").first.click()
+    ok = wait_visible(page, "confirmation")
+    mine = [x for x in list_res(hana) if x.get("starts_at_local") == T(THU, "17:00")]
+    ref = mine[0]["reference"] if mine else None
+    check("UI-P6", "confirmation-reference is exactly the API reference of the booking made under the policy",
+          ok and ref is not None and text(page, "confirmation-reference") == ref, "ui=%r api=%r" % (text(page, "confirmation-reference"), ref))
+    check("UI-P6b", "the booking accepted the policy's terms (version 1, 120-minute end)",
+          bool(mine) and (mine[0].get("accepted_terms") or {}).get("policy_version") == 1 and rp.minutes_between(mine[0]["starts_at"], mine[0]["ends_at"]) == 120, repr(mine[:1]))
+    goto(page, "/lookup")
+    tid(page, "lookup-reference-input").fill(ref or "XXXXXX")
+    tid(page, "lookup-submit").click()
+    wait_visible(page, "reservation-detail")
+    check("UI-P7", "lookup of that booking shows status confirmed and the table label",
+          text(page, "reservation-status") == "confirmed" and "Arbour" in (text(page, "reservation-tables") or ""), repr(text(page, "reservation-status")))
+    ctx.close()
+
+    ctx, page = new_page(width=375, height=800)
+    ui_login(page, "hana@probe.test", "hana-secret-9")
+    ui_search(page, "r_pol", THU, 2)
+    sw, cw = page.evaluate("[document.scrollingElement.scrollWidth, document.scrollingElement.clientWidth]")
+    check("UI-P8", "no horizontal scrolling at 375 px with the policy-driven grid", visible(page, "availability-grid") and sw <= cw, "scrollWidth=%s clientWidth=%s" % (sw, cw))
+    tid(page, cell(["p_b"], "18:00")).first.click()
+    wait_visible(page, "booking-form")
+    first, server = {}, {}
+
+    def lose(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        first["key"] = route.request.headers.get("idempotency-key")
+        first["body"] = route.request.post_data
+        try:
+            resp = route.fetch()
+            server["json"] = resp.json()
+        except Exception as e:  # noqa
+            server["error"] = repr(e)
+        route.abort("failed")
+    page.route("**/reservations", lose)
+    tid(page, "booking-submit").first.click()
+    ok = wait_visible(page, "booking-uncertain")
+    page.unroute("**/reservations")
+    retry = {}
+
+    def capture(route):
+        if route.request.method == "POST" and "key" not in retry:
+            retry["key"] = route.request.headers.get("idempotency-key")
+            retry["body"] = route.request.post_data
+        route.continue_()
+    page.route("**/reservations", capture)
+    tid(page, "booking-submit").first.click()
+    ok2 = wait_visible(page, "confirmation")
+    page.unroute("**/reservations")
+    try:
+        same_body = same_json(json.loads(first.get("body") or "null"), json.loads(retry.get("body") or "null"))
+    except ValueError:
+        same_body = False
+    check("UI-P9", "a lost response under the policy shows booking-uncertain; the retry reuses key and body and recovers the original reference",
+          ok and ok2 and first.get("key") and first.get("key") == retry.get("key") and same_body
+          and text(page, "confirmation-reference") == (server.get("json") or {}).get("reference") and count(page, "booking-uncertain") == 0,
+          "first=%r retry=%r server=%r ui=%r" % (first, retry, server, text(page, "confirmation-reference")))
+    n = [x for x in list_res(hana) if x.get("starts_at_local") == T(THU, "18:00")]
+    check("UI-P9b", "exactly one booking exists for the retried request", len(n) == 1, repr([x.get("reference") for x in n]))
+    ctx.close()
+
+    rp.must_publish(mgr, rp.policy(DAY_OF(7), oh=[{"weekday": rp.ALL_DAYS[DAY_OF(8).weekday()], "opens": "18:00", "closes": "23:00"}]))
+    ctx, page = new_page()
+    ui_login(page, "hana@probe.test", "hana-secret-9")
+    ui_search(page, "r_pol", DAY_OF(7), 2)
+    check("UI-P10", "a day the selected policy closes shows no-slots instead of the grid", visible(page, "no-slots") and count(page, "availability-grid") == 0, "")
+    ctx.close()
+
+
 @group("UI-VIEW")
 def g_viewport():
     reset(s2_fixture())
@@ -662,7 +779,7 @@ def main():
     args = ap.parse_args()
     rp.BASE = args.base_url.rstrip("/")
     only = {x.strip().upper() for x in args.only.split(",") if x.strip()}
-    print("# tablekeeper stage-2 browser probes against %s (THU=%s)" % (rp.BASE, THU))
+    print("# tablekeeper stage-3 browser probes against %s (THU=%s)" % (rp.BASE, THU))
     with sync_playwright() as pw:
         BROWSER = pw.chromium.launch(headless=True)
         for name, fn in GROUPS:

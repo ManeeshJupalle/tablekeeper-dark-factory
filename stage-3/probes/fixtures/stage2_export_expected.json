@@ -1,0 +1,370 @@
+{
+ "thu": "2027-05-13",
+ "fixture": {
+  "users": [
+   {
+    "id": "u_hana",
+    "email": "hana@probe.test",
+    "password": "hana-secret-9",
+    "display_name": "Hana"
+   },
+   {
+    "id": "u_ravi",
+    "email": "ravi@probe.test",
+    "password": "ravi-secret-9",
+    "display_name": "Ravi"
+   }
+  ],
+  "restaurants": [
+   {
+    "id": "r_combo",
+    "name": "Combo House",
+    "timezone": "Europe/Berlin",
+    "slot_minutes": 30,
+    "reservation_duration_minutes": 90,
+    "cancellation_cutoff_minutes": 120,
+    "opening_hours": [
+     {
+      "weekday": "thu",
+      "opens": "18:00",
+      "closes": "23:00"
+     },
+     {
+      "weekday": "fri",
+      "opens": "18:00",
+      "closes": "23:00"
+     },
+     {
+      "weekday": "sat",
+      "opens": "18:00",
+      "closes": "23:00"
+     },
+     {
+      "weekday": "sun",
+      "opens": "18:00",
+      "closes": "23:00"
+     }
+    ],
+    "tables": [
+     {
+      "id": "c_a",
+      "label": "Alcove",
+      "capacity": 2
+     },
+     {
+      "id": "c_b",
+      "label": "Bay",
+      "capacity": 2
+     },
+     {
+      "id": "c_c",
+      "label": "Corner",
+      "capacity": 4
+     },
+     {
+      "id": "c_d",
+      "label": "Den",
+      "capacity": 6
+     }
+    ],
+    "combinable": [
+     [
+      "c_b",
+      "c_a"
+     ],
+     [
+      "c_b",
+      "c_c"
+     ]
+    ]
+   }
+  ],
+  "reservations": [
+   {
+    "id": "res_seed_s2",
+    "reference": "S2SEED",
+    "user_id": "u_hana",
+    "restaurant_id": "r_combo",
+    "table_ids": [
+     "c_b",
+     "c_a"
+    ],
+    "starts_at_local": "2027-05-13T18:00",
+    "party_size": 3
+   },
+   {
+    "id": "res_seed_s2c",
+    "reference": "S2CANC",
+    "user_id": "u_hana",
+    "restaurant_id": "r_combo",
+    "table_id": "c_d",
+    "starts_at_local": "2027-05-13T18:00",
+    "party_size": 2,
+    "status": "cancelled"
+   }
+  ]
+ },
+ "token_hana": "e07b57d7e974d78dd01114b9de17797a9ba5f033d4f09592090fc65ca617b36f",
+ "token_nova": "1be0c9e73b4cac45da0d26c30d3ab8eb56ed485f02136a223f64a6a48645bf54",
+ "nova_user_id": "u_2fb8f9087ca25eed",
+ "kp": "s2-pair-b64595dd8427475ab28f4250c54382e9",
+ "bp": {
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_b",
+   "c_c"
+  ],
+  "starts_at_local": "2027-05-13T20:30",
+  "party_size": 5
+ },
+ "pair": {
+  "reservation_id": "res_f3143ef5ecbf6efe",
+  "reference": "0IE43KL3",
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_b",
+   "c_c"
+  ],
+  "party_size": 5,
+  "status": "confirmed",
+  "starts_at_local": "2027-05-13T20:30",
+  "starts_at": "2027-05-13T20:30:00+02:00",
+  "ends_at": "2027-05-13T22:00:00+02:00",
+  "created_at": "2026-10-04T11:14:32+00:00"
+ },
+ "ks": "s2-single-58edfa0db60148f9b4d348f12ddf4fc9",
+ "bs": {
+  "restaurant_id": "r_combo",
+  "table_id": "c_d",
+  "starts_at_local": "2027-05-13T19:30",
+  "party_size": 4
+ },
+ "single": {
+  "reservation_id": "res_4acddb361b15376a",
+  "reference": "R40791IG",
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_d"
+  ],
+  "table_id": "c_d",
+  "party_size": 4,
+  "status": "confirmed",
+  "starts_at_local": "2027-05-13T19:30",
+  "starts_at": "2027-05-13T19:30:00+02:00",
+  "ends_at": "2027-05-13T21:00:00+02:00",
+  "created_at": "2026-10-04T11:14:32+00:00"
+ },
+ "kc": "s2-canc-f9818ca3678b4f9cb8f7ae6811b428cd",
+ "bc": {
+  "restaurant_id": "r_combo",
+  "table_id": "c_a",
+  "starts_at_local": "2027-05-13T21:30",
+  "party_size": 2
+ },
+ "cancelled_create": {
+  "reservation_id": "res_40013ebc400ac170",
+  "reference": "1JMX0U22",
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_a"
+  ],
+  "table_id": "c_a",
+  "party_size": 2,
+  "status": "confirmed",
+  "starts_at_local": "2027-05-13T21:30",
+  "starts_at": "2027-05-13T21:30:00+02:00",
+  "ends_at": "2027-05-13T23:00:00+02:00",
+  "created_at": "2026-10-04T11:14:32+00:00"
+ },
+ "cancelled": {
+  "reservation_id": "res_40013ebc400ac170",
+  "reference": "1JMX0U22",
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_a"
+  ],
+  "table_id": "c_a",
+  "party_size": 2,
+  "status": "cancelled",
+  "starts_at_local": "2027-05-13T21:30",
+  "starts_at": "2027-05-13T21:30:00+02:00",
+  "ends_at": "2027-05-13T23:00:00+02:00",
+  "created_at": "2026-10-04T11:14:32+00:00"
+ },
+ "kl": "s2-lost-c559a24532e0442186df78d676123794",
+ "bl": {
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_d"
+  ],
+  "starts_at_local": "2027-05-13T21:30",
+  "party_size": 3
+ },
+ "lost": {
+  "reservation_id": "res_bf9edf157f524e52",
+  "reference": "KY7UEMVF",
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_d"
+  ],
+  "table_id": "c_d",
+  "party_size": 3,
+  "status": "confirmed",
+  "starts_at_local": "2027-05-13T21:30",
+  "starts_at": "2027-05-13T21:30:00+02:00",
+  "ends_at": "2027-05-13T23:00:00+02:00",
+  "created_at": "2026-10-04T11:14:32+00:00"
+ },
+ "kf": "s2-fail-6c332017097b4def9eace81c838d0080",
+ "bf": {
+  "restaurant_id": "r_combo",
+  "table_ids": [
+   "c_a",
+   "c_c"
+  ],
+  "starts_at_local": "2027-05-13T22:00",
+  "party_size": 2
+ },
+ "km": "s2-batch-623bb8a270ec4b97834dd0b0de186471",
+ "mb": {
+  "moves": [
+   {
+    "reference": "R40791IG",
+    "party_size": 5
+   },
+   {
+    "reference": "0IE43KL3",
+    "table_ids": [
+     "c_b",
+     "c_c"
+    ]
+   }
+  ]
+ },
+ "batch": {
+  "reservations": [
+   {
+    "reservation_id": "res_4acddb361b15376a",
+    "reference": "R40791IG",
+    "restaurant_id": "r_combo",
+    "table_ids": [
+     "c_d"
+    ],
+    "table_id": "c_d",
+    "party_size": 5,
+    "status": "confirmed",
+    "starts_at_local": "2027-05-13T19:30",
+    "starts_at": "2027-05-13T19:30:00+02:00",
+    "ends_at": "2027-05-13T21:00:00+02:00",
+    "created_at": "2026-10-04T11:14:32+00:00"
+   },
+   {
+    "reservation_id": "res_f3143ef5ecbf6efe",
+    "reference": "0IE43KL3",
+    "restaurant_id": "r_combo",
+    "table_ids": [
+     "c_b",
+     "c_c"
+    ],
+    "party_size": 5,
+    "status": "confirmed",
+    "starts_at_local": "2027-05-13T20:30",
+    "starts_at": "2027-05-13T20:30:00+02:00",
+    "ends_at": "2027-05-13T22:00:00+02:00",
+    "created_at": "2026-10-04T11:14:32+00:00"
+   }
+  ]
+ },
+ "list": [
+  {
+   "reservation_id": "res_40013ebc400ac170",
+   "reference": "1JMX0U22",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_a"
+   ],
+   "table_id": "c_a",
+   "party_size": 2,
+   "status": "cancelled",
+   "starts_at_local": "2027-05-13T21:30",
+   "starts_at": "2027-05-13T21:30:00+02:00",
+   "ends_at": "2027-05-13T23:00:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  },
+  {
+   "reservation_id": "res_bf9edf157f524e52",
+   "reference": "KY7UEMVF",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_d"
+   ],
+   "table_id": "c_d",
+   "party_size": 3,
+   "status": "confirmed",
+   "starts_at_local": "2027-05-13T21:30",
+   "starts_at": "2027-05-13T21:30:00+02:00",
+   "ends_at": "2027-05-13T23:00:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  },
+  {
+   "reservation_id": "res_f3143ef5ecbf6efe",
+   "reference": "0IE43KL3",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_b",
+    "c_c"
+   ],
+   "party_size": 5,
+   "status": "confirmed",
+   "starts_at_local": "2027-05-13T20:30",
+   "starts_at": "2027-05-13T20:30:00+02:00",
+   "ends_at": "2027-05-13T22:00:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  },
+  {
+   "reservation_id": "res_4acddb361b15376a",
+   "reference": "R40791IG",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_d"
+   ],
+   "table_id": "c_d",
+   "party_size": 5,
+   "status": "confirmed",
+   "starts_at_local": "2027-05-13T19:30",
+   "starts_at": "2027-05-13T19:30:00+02:00",
+   "ends_at": "2027-05-13T21:00:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  },
+  {
+   "reservation_id": "res_seed_s2",
+   "reference": "S2SEED",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_b",
+    "c_a"
+   ],
+   "party_size": 3,
+   "status": "confirmed",
+   "starts_at_local": "2027-05-13T18:00",
+   "starts_at": "2027-05-13T18:00:00+02:00",
+   "ends_at": "2027-05-13T19:30:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  },
+  {
+   "reservation_id": "res_seed_s2c",
+   "reference": "S2CANC",
+   "restaurant_id": "r_combo",
+   "table_ids": [
+    "c_d"
+   ],
+   "table_id": "c_d",
+   "party_size": 2,
+   "status": "cancelled",
+   "starts_at_local": "2027-05-13T18:00",
+   "starts_at": "2027-05-13T18:00:00+02:00",
+   "ends_at": "2027-05-13T19:30:00+02:00",
+   "created_at": "2026-10-04T11:14:32+00:00"
+  }
+ ]
+}
