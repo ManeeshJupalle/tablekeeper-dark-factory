@@ -248,29 +248,55 @@ def run(browser, viewport, label):
     page.wait_for_selector(sel("reservation-error"))
     check(f"{label} unknown ref error", page.query_selector(sel("reservation-detail")) is None)
 
-    # Out-of-order searches: delay the first availability response.
+    # Out-of-order searches. Search A's response is held (not merely delayed) while
+    # search B is issued, answered and used to open a booking form; only then is A
+    # released. Everything on screen must still describe B.
+    harbour = restaurant(id="r_harbour", name="Harbour Light", combinable=[["h_bay", "h_win"]],
+                         tables=[{"id": "h_bay", "label": "Bay", "capacity": 4}, {"id": "h_win", "label": "Window", "capacity": 2}])
+    reset(restaurants=[restaurant(), harbour])
+    log_in(page)
+    for how in ("click", "enter"):
+        held = []
+
+        def hold_first(route, request, held=held):
+            if not held and "restaurant_id=r_anker" in request.url:
+                held.append(route)          # never answered until released below
+                return
+            route.continue_()
+
+        page.route("**/availability**", hold_first)
+        page.goto("/")
+        page.select_option(sel("restaurant-select"), "r_anker")
+        page.fill(sel("date-input"), DATE)
+        page.fill(sel("party-size-input"), "4")
+        page.click(sel("search-button"))                       # search A, held
+        for _ in range(100):
+            if held:
+                break
+            page.wait_for_timeout(50)
+        check(f"{label} OOO-{how} A is held", bool(held))
+        check(f"{label} OOO-{how} search usable while A in flight", page.is_enabled(sel("search-button")))
+        page.select_option(sel("restaurant-select"), "r_harbour")
+        page.fill(sel("party-size-input"), "6")
+        if how == "click":
+            page.click(sel("search-button"), timeout=3000)     # search B
+        else:
+            page.press(sel("party-size-input"), "Enter")       # search B via the keyboard
+        page.wait_for_selector(sel("slot-h_bay+h_win-19:00"), timeout=5000)
+        page.click(sel("slot-h_bay+h_win-19:00"))
+        page.wait_for_selector(sel("booking-form"))
+        held[0].continue_()                                    # A's response now arrives late
+        page.wait_for_timeout(1200)
+        summary = page.text_content(sel("booking-summary"))
+        results_text = page.text_content("#results")
+        check(f"{label} OOO-{how} grid still describes B", page.query_selector(sel("slot-t_2-19:00")) is None
+              and page.get_attribute(sel("slot-h_bay+h_win-19:00"), "data-available") == "true"
+              and page.get_attribute(sel("slot-h_bay-19:00"), "data-available") == "false", results_text[:160])
+        check(f"{label} OOO-{how} labels describe B", "Harbour Light" in results_text and "Zum Anker" not in results_text, results_text[:160])
+        check(f"{label} OOO-{how} form describes B", "Bay" in summary and "Window" in summary and "19:00" in summary
+              and page.input_value(sel("booking-party-size")) == "6", summary)
+        page.unroute("**/availability**")
     reset()
-    delayed = {"armed": True}
-
-    def slow_first(route, request):
-        if delayed["armed"] and "party_size=2" in request.url:
-            delayed["armed"] = False
-            page.wait_for_timeout(1500)
-        route.continue_()
-
-    page.route("**/availability**", slow_first)
-    page.goto("/")
-    page.select_option(sel("restaurant-select"), "r_anker")
-    page.fill(sel("date-input"), DATE)
-    page.fill(sel("party-size-input"), "2")
-    page.click(sel("search-button"))          # search A (slow)
-    page.fill(sel("party-size-input"), "6")
-    page.click(sel("search-button"))          # search B (fast)
-    page.wait_for_selector(sel("availability-grid"))
-    page.wait_for_timeout(2200)                # let A's late response arrive
-    check(f"{label} out-of-order grid describes B", page.get_attribute(sel("slot-t_1-19:00"), "data-available") == "false"
-          and page.get_attribute(sel("slot-t_3-19:00"), "data-available") == "true")
-    page.unroute("**/availability**")
 
     # Lost response: the server commits, the browser never sees the reply.
     log_in(page)

@@ -600,6 +600,10 @@ def slot_at(rid, date, party, hhmm):
 def test_stage2_api():
     for bad in ([["t_1"]], [["t_1", "t_2", "t_3"]], [["t_1", "t_1"]], [["t_1", "t_x"]], ["t_1"], [[1, 2]], "x"):
         expect(f"s2 bad combinable {json.dumps(bad)}", reset(fixture(restaurants=[restaurant(combinable=bad)])), 422, "validation_failed")
+    # A repeated or reversed pair declares nothing new: first occurrence kept, no duplicate options.
+    expect("s2 duplicate combinable accepted", reset(fixture(restaurants=[restaurant(combinable=[["t_1", "t_2"], ["t_2", "t_1"], ["t_1", "t_2"], ["t_2", "t_3"]])])), 204)
+    check("s2 duplicate combinable collapsed", call("GET", "/restaurants/r_anker").json()["combinable"] == [["t_1", "t_2"], ["t_2", "t_3"]])
+    check("s2 duplicate combinable options once", [o["table_ids"] for o in slot_at("r_anker", DATE, 5, "19:00")["available_options"]] == [["t_3"], ["t_1", "t_2"], ["t_2", "t_3"]])
     reset(fixture(restaurants=[combo_restaurant()]))
     ada = login(ADA["email"], ADA["password"])
     bob = login(BOB["email"], BOB["password"])
