@@ -41,6 +41,10 @@ type Table struct {
 	Capacity int
 }
 
+// maxTablesPerBooking is the largest table set a booking may occupy: a single
+// table or one declared combinable pair.
+const maxTablesPerBooking = 2
+
 type Restaurant struct {
 	ID              string
 	Name            string
@@ -50,6 +54,7 @@ type Restaurant struct {
 	CutoffMinutes   int
 	Hours           []OpeningHours
 	Tables          []Table
+	Combinable      [][]string // declared pairs, each in fixture order
 	Location        *time.Location
 }
 
@@ -60,6 +65,29 @@ func (r *Restaurant) table(id string) *Table {
 		}
 	}
 	return nil
+}
+
+// pair returns the declared combinable pair containing exactly a and b, in its
+// declared order, or nil when the two tables may not be combined.
+func (r *Restaurant) pair(a, b string) []string {
+	for _, p := range r.Combinable {
+		if (p[0] == a && p[1] == b) || (p[0] == b && p[1] == a) {
+			return p
+		}
+	}
+	return nil
+}
+
+// sharesTable reports whether two table sets have a member in common.
+func sharesTable(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *Restaurant) duration() time.Duration {
@@ -75,7 +103,7 @@ type Reservation struct {
 	Reference     string
 	UserID        string
 	RestaurantID  string
-	TableID       string
+	TableIDs      []string // one table, or a declared combinable pair
 	PartySize     int
 	Status        string
 	StartsAtLocal localTime

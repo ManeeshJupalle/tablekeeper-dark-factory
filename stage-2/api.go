@@ -12,23 +12,24 @@ import (
 
 // Error codes from the requirements (§5 and the per-endpoint tables).
 const (
-	codeMalformed        = "malformed_request"
-	codeMissingKey       = "missing_idempotency_key"
-	codeUnauthenticated  = "unauthenticated"
-	codeNotFound         = "not_found"
-	codeKeyReuse         = "idempotency_key_reuse"
-	codeValidation       = "validation_failed"
-	codeEmailTaken       = "email_taken"
-	codeTableUnavailable = "table_unavailable"
-	codeNotOnGrid        = "not_on_slot_grid"
-	codeOutsideHours     = "outside_opening_hours"
-	codeExceedsCapacity  = "party_exceeds_capacity"
-	codeInvalidLocalTime = "invalid_local_time"
-	codeCutoffPassed     = "cutoff_passed"
-	codeCancelled        = "reservation_cancelled"
-	codeMethodNotAllowed = "method_not_allowed"
-	codePayloadTooLarge  = "payload_too_large"
-	codeInternal         = "internal_error"
+	codeMalformed             = "malformed_request"
+	codeMissingKey            = "missing_idempotency_key"
+	codeUnauthenticated       = "unauthenticated"
+	codeNotFound              = "not_found"
+	codeKeyReuse              = "idempotency_key_reuse"
+	codeValidation            = "validation_failed"
+	codeEmailTaken            = "email_taken"
+	codeTableUnavailable      = "table_unavailable"
+	codeNotOnGrid             = "not_on_slot_grid"
+	codeOutsideHours          = "outside_opening_hours"
+	codeExceedsCapacity       = "party_exceeds_capacity"
+	codeInvalidLocalTime      = "invalid_local_time"
+	codeCutoffPassed          = "cutoff_passed"
+	codeCancelled             = "reservation_cancelled"
+	codeCombinationNotAllowed = "combination_not_allowed"
+	codeMethodNotAllowed      = "method_not_allowed"
+	codePayloadTooLarge       = "payload_too_large"
+	codeInternal              = "internal_error"
 )
 
 // Request body limits. Test-control bodies (reset, import) may carry a whole
@@ -51,7 +52,9 @@ func fail(status int, code, message string) *apiError {
 	return &apiError{Status: status, Code: code, Message: message}
 }
 
-func invalid(message string) *apiError { return fail(http.StatusUnprocessableEntity, codeValidation, message) }
+func invalid(message string) *apiError {
+	return fail(http.StatusUnprocessableEntity, codeValidation, message)
+}
 
 func malformed(message string) *apiError { return fail(http.StatusBadRequest, codeMalformed, message) }
 

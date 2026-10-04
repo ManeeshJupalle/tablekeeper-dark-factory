@@ -139,16 +139,15 @@ func (a *app) moveReservations(w http.ResponseWriter, r *http.Request) {
 	for _, pm := range planned {
 		listed[pm.res.ID] = true
 	}
-	unavailable := fail(http.StatusConflict, codeTableUnavailable, "a table is taken for an overlapping interval")
 	for i, pm := range planned {
 		start, end := pm.p.startsAt, pm.p.endsAt(rest)
-		if st.tableBusy(rest, pm.p.table.ID, start, end, listed) {
-			writeError(w, unavailable)
+		if st.setBusy(rest, pm.p.tableIDs, start, end, listed) {
+			writeError(w, tableUnavailable)
 			return
 		}
 		for _, other := range planned[:i] {
-			if other.p.table.ID == pm.p.table.ID && overlaps(start, end, other.p.startsAt, other.p.endsAt(rest)) {
-				writeError(w, unavailable)
+			if sharesTable(other.p.tableIDs, pm.p.tableIDs) && overlaps(start, end, other.p.startsAt, other.p.endsAt(rest)) {
+				writeError(w, tableUnavailable)
 				return
 			}
 		}

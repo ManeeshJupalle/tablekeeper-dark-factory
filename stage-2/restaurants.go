@@ -34,6 +34,7 @@ type restaurantDetail struct {
 	CancellationCutoffMinutes  int                `json:"cancellation_cutoff_minutes"`
 	OpeningHours               []openingHoursView `json:"opening_hours"`
 	Tables                     []tableView        `json:"tables"`
+	Combinable                 [][]string         `json:"combinable"`
 }
 
 func detailOf(r *Restaurant) restaurantDetail {
@@ -46,12 +47,16 @@ func detailOf(r *Restaurant) restaurantDetail {
 		CancellationCutoffMinutes:  r.CutoffMinutes,
 		OpeningHours:               []openingHoursView{},
 		Tables:                     []tableView{},
+		Combinable:                 [][]string{},
 	}
 	for _, h := range r.Hours {
 		d.OpeningHours = append(d.OpeningHours, openingHoursView{h.Weekday, h.Opens, h.Closes})
 	}
 	for _, t := range r.Tables {
 		d.Tables = append(d.Tables, tableView{t.ID, t.Label, t.Capacity})
+	}
+	for _, p := range r.Combinable {
+		d.Combinable = append(d.Combinable, []string{p[0], p[1]})
 	}
 	return d
 }
@@ -77,10 +82,17 @@ func (a *app) getRestaurant(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, detailOf(rest))
 }
 
+// optionView is one bookable seating option: a single table or a declared pair.
+type optionView struct {
+	TableIDs []string `json:"table_ids"`
+	Capacity int      `json:"capacity"`
+}
+
 type slotView struct {
-	StartsAtLocal     string   `json:"starts_at_local"`
-	StartsAt          string   `json:"starts_at"`
-	AvailableTableIDs []string `json:"available_table_ids"`
+	StartsAtLocal     string       `json:"starts_at_local"`
+	StartsAt          string       `json:"starts_at"`
+	AvailableTableIDs []string     `json:"available_table_ids"`
+	AvailableOptions  []optionView `json:"available_options"`
 }
 
 type availabilityView struct {
@@ -136,7 +148,8 @@ func (a *app) availability(w http.ResponseWriter, r *http.Request) {
 }
 
 // slotsFor lists every grid slot of the day (§8) with the tables that can seat
-// the party and are free for the whole reservation. Caller holds the lock.
+// the party and are free for the whole reservation, then every declared pair
+// that can (stage 2). Caller holds the lock.
 func (s *State) slotsFor(rest *Restaurant, date localDate, party int) []slotView {
 	slots := []slotView{}
 	weekday := weekdayOf(date)
@@ -151,13 +164,21 @@ func (s *State) slotsFor(rest *Restaurant, date localDate, party int) []slotView
 				continue // the slot falls in a spring-forward gap
 			}
 			end := start.Add(rest.duration())
-			free := []string{}
+			singles := []string{}
+			options := []optionView{}
 			for _, t := range rest.Tables {
 				if t.Capacity >= party && !s.tableBusy(rest, t.ID, start, end, nil) {
-					free = append(free, t.ID)
+					singles = append(singles, t.ID)
+					options = append(options, optionView{[]string{t.ID}, t.Capacity})
 				}
 			}
-			slots = append(slots, slotView{lt.String(), formatTime(start), free})
+			for _, p := range rest.Combinable {
+				capacity := rest.table(p[0]).Capacity + rest.table(p[1]).Capacity
+				if capacity >= party && !s.setBusy(rest, p, start, end, nil) {
+					options = append(options, optionView{[]string{p[0], p[1]}, capacity})
+				}
+			}
+			slots = append(slots, slotView{lt.String(), formatTime(start), singles, options})
 		}
 	}
 	return slots

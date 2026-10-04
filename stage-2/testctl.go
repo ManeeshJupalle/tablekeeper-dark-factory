@@ -63,16 +63,16 @@ type exportToken struct {
 }
 
 type exportReservation struct {
-	ID            string `json:"id"`
-	Reference     string `json:"reference"`
-	UserID        string `json:"user_id"`
-	RestaurantID  string `json:"restaurant_id"`
-	TableID       string `json:"table_id"`
-	PartySize     int    `json:"party_size"`
-	Status        string `json:"status"`
-	StartsAtLocal string `json:"starts_at_local"`
-	StartsAt      string `json:"starts_at"`
-	CreatedAt     string `json:"created_at"`
+	ID            string   `json:"id"`
+	Reference     string   `json:"reference"`
+	UserID        string   `json:"user_id"`
+	RestaurantID  string   `json:"restaurant_id"`
+	TableIDs      []string `json:"table_ids"`
+	PartySize     int      `json:"party_size"`
+	Status        string   `json:"status"`
+	StartsAtLocal string   `json:"starts_at_local"`
+	StartsAt      string   `json:"starts_at"`
+	CreatedAt     string   `json:"created_at"`
 }
 
 type exportIdem struct {
@@ -113,7 +113,7 @@ func snapshot(st *State) exportEnvelope {
 			Reference:     res.Reference,
 			UserID:        res.UserID,
 			RestaurantID:  res.RestaurantID,
-			TableID:       res.TableID,
+			TableIDs:      append([]string{}, res.TableIDs...),
 			PartySize:     res.PartySize,
 			Status:        res.Status,
 			StartsAtLocal: res.StartsAtLocal.String(),
@@ -164,7 +164,9 @@ func (a *app) importState(w http.ResponseWriter, r *http.Request) {
 }
 
 // stateFromExport rebuilds a State from an export envelope produced by this
-// service, verifying every record so a bad import leaves the destination as is.
+// service or by the stage-1 service (same track and format_version; restaurants
+// without `combinable`, reservations with `table_id`), verifying every record so
+// a bad import leaves the destination as is.
 func stateFromExport(envelope obj) (*State, *apiError) {
 	track, e := requiredString(envelope, "track")
 	if e != nil {

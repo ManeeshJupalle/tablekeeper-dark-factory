@@ -14,24 +14,25 @@ const (
 )
 
 type reservationView struct {
-	ReservationID string `json:"reservation_id"`
-	Reference     string `json:"reference"`
-	RestaurantID  string `json:"restaurant_id"`
-	TableID       string `json:"table_id"`
-	PartySize     int    `json:"party_size"`
-	Status        string `json:"status"`
-	StartsAtLocal string `json:"starts_at_local"`
-	StartsAt      string `json:"starts_at"`
-	EndsAt        string `json:"ends_at"`
-	CreatedAt     string `json:"created_at"`
+	ReservationID string   `json:"reservation_id"`
+	Reference     string   `json:"reference"`
+	RestaurantID  string   `json:"restaurant_id"`
+	TableIDs      []string `json:"table_ids"`
+	TableID       *string  `json:"table_id,omitempty"` // only for a single-table set
+	PartySize     int      `json:"party_size"`
+	Status        string   `json:"status"`
+	StartsAtLocal string   `json:"starts_at_local"`
+	StartsAt      string   `json:"starts_at"`
+	EndsAt        string   `json:"ends_at"`
+	CreatedAt     string   `json:"created_at"`
 }
 
 func viewOf(res *Reservation, rest *Restaurant) reservationView {
-	return reservationView{
+	v := reservationView{
 		ReservationID: res.ID,
 		Reference:     res.Reference,
 		RestaurantID:  res.RestaurantID,
-		TableID:       res.TableID,
+		TableIDs:      append([]string{}, res.TableIDs...),
 		PartySize:     res.PartySize,
 		Status:        res.Status,
 		StartsAtLocal: res.StartsAtLocal.String(),
@@ -39,15 +40,54 @@ func viewOf(res *Reservation, rest *Restaurant) reservationView {
 		EndsAt:        formatTime(res.StartsAt.Add(rest.duration())),
 		CreatedAt:     formatTime(res.CreatedAt.UTC()),
 	}
+	if len(res.TableIDs) == 1 {
+		v.TableID = &res.TableIDs[0]
+	}
+	return v
 }
 
 // bookingFields are the amendable parts of a booking as sent by a client.
-// A nil pointer means the field was absent.
+// A nil value means the field was absent.
 type bookingFields struct {
 	restaurantID *string
-	tableID      *string
+	tableIDs     []string
 	startsAt     *localTime
 	partySize    *int
+}
+
+// parseTableSet reads `table_ids`, or the stage-1 `table_id` meaning a set of
+// one. Wrong JSON types are 400; sending both or an empty list is 422.
+func parseTableSet(m map[string]any) ([]string, *apiError) {
+	single, hasSingle, ok := stringField(m, "table_id")
+	if !ok {
+		return nil, malformed("table_id must be a string")
+	}
+	raw, hasSet := m["table_ids"]
+	if hasSingle && hasSet {
+		return nil, invalid("send either table_id or table_ids, not both")
+	}
+	if hasSingle {
+		return []string{single}, nil
+	}
+	if !hasSet {
+		return nil, nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil, malformed("table_ids must be an array of strings")
+	}
+	ids := make([]string, 0, len(arr))
+	for _, v := range arr {
+		s, ok := v.(string)
+		if !ok {
+			return nil, malformed("table_ids must be an array of strings")
+		}
+		ids = append(ids, s)
+	}
+	if len(ids) == 0 {
+		return nil, invalid("table_ids must name at least one table")
+	}
+	return ids, nil
 }
 
 // parseBookingFields validates field presence and type. requireAll is the POST
@@ -64,13 +104,14 @@ func parseBookingFields(m map[string]any, requireAll bool) (bookingFields, *apiE
 		}
 		f.restaurantID = &s
 	}
-	if s, present, ok := stringField(m, "table_id"); !ok {
-		return f, malformed("table_id must be a string")
-	} else if present {
-		f.tableID = &s
-	} else if requireAll {
-		return f, invalid("table_id is required")
+	ids, e := parseTableSet(m)
+	if e != nil {
+		return f, e
 	}
+	if ids == nil && requireAll {
+		return f, invalid("table_ids is required")
+	}
+	f.tableIDs = ids
 	if v, present := m["starts_at_local"]; present {
 		s, ok := v.(string)
 		if !ok {
@@ -98,9 +139,9 @@ func parseBookingFields(m map[string]any, requireAll bool) (bookingFields, *apiE
 }
 
 // placement is a fully resolved booking request, checked against everything
-// except table occupancy.
+// except table occupancy. tableIDs is in canonical (fixture/combinable) order.
 type placement struct {
-	table     *Table
+	tableIDs  []string
 	local     localTime
 	startsAt  time.Time
 	partySize int
@@ -108,12 +149,45 @@ type placement struct {
 
 func (p placement) endsAt(rest *Restaurant) time.Time { return p.startsAt.Add(rest.duration()) }
 
-// resolvePlacement applies the POST /reservations rules in order: table exists,
-// the local time exists, it is inside opening hours and on the grid, the party fits.
-func resolvePlacement(rest *Restaurant, tableID string, lt localTime, party int) (placement, *apiError) {
-	tbl := rest.table(tableID)
-	if tbl == nil {
-		return placement{}, notFound("no such table at this restaurant")
+// resolveTableSet validates a requested table set against the restaurant: no
+// duplicates, at most a pair, every table known, and a pair declared combinable.
+// It returns the set in canonical order and its summed capacity.
+func resolveTableSet(rest *Restaurant, ids []string) ([]string, int, *apiError) {
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			return nil, 0, invalid("duplicate table id in the set")
+		}
+		seen[id] = true
+	}
+	if len(ids) > maxTablesPerBooking {
+		return nil, 0, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "at most two tables may be combined")
+	}
+	capacity := 0
+	for _, id := range ids {
+		t := rest.table(id)
+		if t == nil {
+			return nil, 0, notFound("no such table at this restaurant")
+		}
+		capacity += t.Capacity
+	}
+	if len(ids) == 1 {
+		return []string{ids[0]}, capacity, nil
+	}
+	p := rest.pair(ids[0], ids[1])
+	if p == nil {
+		return nil, 0, fail(http.StatusUnprocessableEntity, codeCombinationNotAllowed, "those tables are not declared combinable")
+	}
+	return []string{p[0], p[1]}, capacity, nil
+}
+
+// resolvePlacement applies the POST /reservations rules in order: the table set
+// is valid, the local time exists, it is inside opening hours and on the grid,
+// and the party fits the (summed) capacity.
+func resolvePlacement(rest *Restaurant, ids []string, lt localTime, party int) (placement, *apiError) {
+	set, capacity, e := resolveTableSet(rest, ids)
+	if e != nil {
+		return placement{}, e
 	}
 	start, ok := resolveLocal(rest.Location, lt)
 	if !ok {
@@ -122,10 +196,10 @@ func resolvePlacement(rest *Restaurant, tableID string, lt localTime, party int)
 	if e := rest.checkHours(lt); e != nil {
 		return placement{}, e
 	}
-	if party > tbl.Capacity {
-		return placement{}, fail(http.StatusUnprocessableEntity, codeExceedsCapacity, "party_size exceeds the table capacity")
+	if party > capacity {
+		return placement{}, fail(http.StatusUnprocessableEntity, codeExceedsCapacity, "party_size exceeds the seating capacity")
 	}
-	return placement{table: tbl, local: lt, startsAt: start, partySize: party}, nil
+	return placement{tableIDs: set, local: lt, startsAt: start, partySize: party}, nil
 }
 
 // checkHours finds the opening window containing the start and applies the slot
@@ -148,10 +222,16 @@ func (r *Restaurant) checkHours(lt localTime) *apiError {
 }
 
 // tableBusy reports whether a confirmed reservation other than those in exclude
-// occupies the table during the half-open interval [start, end).
+// occupies the table during the half-open interval [start, end). A combination
+// booking occupies every one of its tables.
 func (s *State) tableBusy(rest *Restaurant, tableID string, start, end time.Time, exclude map[string]bool) bool {
+	return s.setBusy(rest, []string{tableID}, start, end, exclude)
+}
+
+// setBusy reports whether any table of the set is occupied during [start, end).
+func (s *State) setBusy(rest *Restaurant, ids []string, start, end time.Time, exclude map[string]bool) bool {
 	for _, res := range s.reservations {
-		if res.Status != statusConfirmed || res.RestaurantID != rest.ID || res.TableID != tableID || exclude[res.ID] {
+		if res.Status != statusConfirmed || res.RestaurantID != rest.ID || exclude[res.ID] || !sharesTable(res.TableIDs, ids) {
 			continue
 		}
 		resEnd := res.StartsAt.Add(rest.duration())
@@ -191,6 +271,8 @@ func replay(w http.ResponseWriter, st *State, k idemKey, canonical string) bool 
 	writeRaw(w, http.StatusOK, rec.Response)
 	return true
 }
+
+var tableUnavailable = fail(http.StatusConflict, codeTableUnavailable, "a table is taken for an overlapping interval")
 
 func (a *app) createReservation(w http.ResponseWriter, r *http.Request) {
 	body, e := readBody(w, r, maxBodyBytes)
@@ -232,13 +314,13 @@ func (a *app) createReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, notFound("no such restaurant"))
 		return
 	}
-	p, e := resolvePlacement(rest, *f.tableID, *f.startsAt, *f.partySize)
+	p, e := resolvePlacement(rest, f.tableIDs, *f.startsAt, *f.partySize)
 	if e != nil {
 		writeError(w, e)
 		return
 	}
-	if st.tableBusy(rest, p.table.ID, p.startsAt, p.endsAt(rest), nil) {
-		writeError(w, fail(http.StatusConflict, codeTableUnavailable, "the table is taken for an overlapping interval"))
+	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(rest), nil) {
+		writeError(w, tableUnavailable)
 		return
 	}
 	res := &Reservation{
@@ -246,7 +328,7 @@ func (a *app) createReservation(w http.ResponseWriter, r *http.Request) {
 		Reference:     st.newReference(),
 		UserID:        user.ID,
 		RestaurantID:  rest.ID,
-		TableID:       p.table.ID,
+		TableIDs:      p.tableIDs,
 		PartySize:     p.partySize,
 		Status:        statusConfirmed,
 		StartsAtLocal: p.local,
@@ -337,9 +419,9 @@ func (a *app) cancelReservation(w http.ResponseWriter, r *http.Request, referenc
 // amend resolves a change to an existing booking against the ordinary rules,
 // without touching occupancy; the caller decides how occupancy is checked.
 func amend(rest *Restaurant, res *Reservation, f bookingFields) (placement, *apiError) {
-	tableID, lt, party := res.TableID, res.StartsAtLocal, res.PartySize
-	if f.tableID != nil {
-		tableID = *f.tableID
+	ids, lt, party := res.TableIDs, res.StartsAtLocal, res.PartySize
+	if f.tableIDs != nil {
+		ids = f.tableIDs
 	}
 	if f.startsAt != nil {
 		lt = *f.startsAt
@@ -347,11 +429,11 @@ func amend(rest *Restaurant, res *Reservation, f bookingFields) (placement, *api
 	if f.partySize != nil {
 		party = *f.partySize
 	}
-	return resolvePlacement(rest, tableID, lt, party)
+	return resolvePlacement(rest, ids, lt, party)
 }
 
 func apply(res *Reservation, p placement) {
-	res.TableID = p.table.ID
+	res.TableIDs = p.tableIDs
 	res.StartsAtLocal = p.local
 	res.StartsAt = p.startsAt
 	res.PartySize = p.partySize
@@ -400,8 +482,8 @@ func (a *app) patchReservation(w http.ResponseWriter, r *http.Request, reference
 		return
 	}
 	// The booking's own occupancy never blocks its move.
-	if st.tableBusy(rest, p.table.ID, p.startsAt, p.endsAt(rest), map[string]bool{res.ID: true}) {
-		writeError(w, fail(http.StatusConflict, codeTableUnavailable, "the table is taken for an overlapping interval"))
+	if st.setBusy(rest, p.tableIDs, p.startsAt, p.endsAt(rest), map[string]bool{res.ID: true}) {
+		writeError(w, tableUnavailable)
 		return
 	}
 	apply(res, p)

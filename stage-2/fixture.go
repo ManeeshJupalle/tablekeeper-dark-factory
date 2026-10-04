@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"regexp"
 	"sync"
 	"time"
@@ -131,7 +132,41 @@ func parseRestaurant(v any) (*Restaurant, *apiError) {
 		}
 		r.Tables = append(r.Tables, t)
 	}
+	pairs, e := arrayField(o, "combinable")
+	if e != nil {
+		return nil, e
+	}
+	for _, pv := range pairs {
+		p, e := parseCombinablePair(r, pv)
+		if e != nil {
+			return nil, e
+		}
+		r.Combinable = append(r.Combinable, p)
+	}
 	return r, nil
+}
+
+// parseCombinablePair accepts exactly two distinct known table ids (stage 2).
+func parseCombinablePair(r *Restaurant, v any) ([]string, *apiError) {
+	arr, ok := v.([]any)
+	if !ok || len(arr) != maxTablesPerBooking {
+		return nil, invalid("each combinable entry must be a pair of table ids")
+	}
+	pair := make([]string, 0, maxTablesPerBooking)
+	for _, idv := range arr {
+		id, ok := idv.(string)
+		if !ok {
+			return nil, invalid("combinable table ids must be strings")
+		}
+		if r.table(id) == nil {
+			return nil, invalid("combinable names an unknown table " + id)
+		}
+		pair = append(pair, id)
+	}
+	if pair[0] == pair[1] {
+		return nil, invalid("a combinable pair must name two different tables")
+	}
+	return pair, nil
 }
 
 func parseOpeningHours(v any) (OpeningHours, *apiError) {
@@ -246,8 +281,12 @@ func addReservation(st *State, v any, now time.Time) *apiError {
 	if res.RestaurantID, e = requiredString(o, "restaurant_id"); e != nil {
 		return e
 	}
-	if res.TableID, e = requiredString(o, "table_id"); e != nil {
+	ids, e := parseTableSet(o)
+	if e != nil {
 		return e
+	}
+	if ids == nil {
+		return invalid("reservation needs table_id or table_ids")
 	}
 	local, e := requiredString(o, "starts_at_local")
 	if e != nil {
@@ -280,8 +319,26 @@ func addReservation(st *State, v any, now time.Time) *apiError {
 	if rest == nil {
 		return invalid("reservation restaurant_id is unknown")
 	}
-	if rest.table(res.TableID) == nil {
-		return invalid("reservation table_id is unknown")
+	// Seeded bookings are given, so only the set itself is checked: known,
+	// distinct tables, at most a pair. A declared pair is stored in its order.
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if rest.table(id) == nil {
+			return invalid("reservation names an unknown table " + id)
+		}
+		if seen[id] {
+			return invalid("reservation repeats table " + id)
+		}
+		seen[id] = true
+	}
+	if len(ids) > maxTablesPerBooking {
+		return invalid("a reservation may occupy at most two tables")
+	}
+	res.TableIDs = append([]string{}, ids...)
+	if len(ids) == maxTablesPerBooking {
+		if p := rest.pair(ids[0], ids[1]); p != nil {
+			res.TableIDs = []string{p[0], p[1]}
+		}
 	}
 	lt, ok := parseLocalTime(local)
 	if !ok {
@@ -336,7 +393,7 @@ func stateFromFixture(fixture obj, now time.Time) (*State, *apiError) {
 	wg.Wait()
 	for i, o := range userObjs {
 		if hashes[i] == "" {
-			return nil, fail(500, codeInternal, "password hashing failed")
+			return nil, fail(http.StatusInternalServerError, codeInternal, "password hashing failed")
 		}
 		if e := addUser(st, o, hashes[i]); e != nil {
 			return nil, e
