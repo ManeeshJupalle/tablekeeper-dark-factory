@@ -53,6 +53,16 @@ func (a *app) route(w http.ResponseWriter, r *http.Request) {
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
 
 	switch {
+	case path == "/":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.screen(w, r, "index.html") }})
+	case path == "/signup":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.screen(w, r, "signup.html") }})
+	case path == "/login":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.screen(w, r, "login.html") }})
+	case path == "/lookup":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.screen(w, r, "lookup.html") }})
+	case len(segments) == 2 && segments[0] == "static":
+		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) { a.static(w, r, segments[1]) }})
 	case path == "/health":
 		dispatch(w, r, methodHandlers{http.MethodGet: a.health})
 	case path == "/_test/reset":

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your reservation · Tablekeeper</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body data-page="lookup">
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Tablekeeper</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="/">Find a table</a>
+      <a href="/lookup" aria-current="page">Your reservation</a>
+    </nav>
+    <div class="auth-slot" id="auth-slot"></div>
+  </div>
+</header>
+
+<main id="main" class="container narrow">
+  <section class="card" aria-labelledby="lookup-heading">
+    <p class="eyebrow">Your reservation</p>
+    <h1 id="lookup-heading">Look up a booking</h1>
+    <p class="lede">Enter the reference from your confirmation to see the details or cancel.</p>
+    <form id="lookup-form" class="lookup-form" novalidate>
+      <div class="field">
+        <label for="lookup-reference">Reservation reference</label>
+        <input id="lookup-reference" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="e.g. K3P7QW" data-testid="lookup-reference-input" required>
+      </div>
+      <div class="field field-action">
+        <button type="submit" class="btn btn-primary" data-testid="lookup-submit">Find reservation</button>
+      </div>
+    </form>
+    <div id="lookup-result" aria-live="polite"></div>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="container">Tablekeeper · reservations for restaurants and the people who love them</div></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
