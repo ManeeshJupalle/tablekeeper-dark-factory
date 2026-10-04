@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end checks for Tablekeeper stage 2 (stage-1 rules included) against a running service.
+"""End-to-end checks for Tablekeeper stage 3 (stage-1 and stage-2 rules included) against a running service.
 
-Usage: python3 tests/smoke.py http://127.0.0.1:8080 [http://stage1-service:8080]
+Usage: python3 tests/smoke.py http://127.0.0.1:8080 [stage-1 URL] [stage-2 URL]
 
-The optional second URL is a running stage-1 service; its export is imported here
-to check the upgrade path.
+The optional URLs are running stage-1 and stage-2 services; their exports are
+imported here to check the upgrade paths. Stage-3 rules live in stage3_smoke.py.
 
 Standard library only. Every requirement in the stage-1 document is exercised at
 least once: each endpoint, each error code, the DST rules, idempotent replay,
@@ -200,7 +200,7 @@ def test_restaurants_and_availability():
     body = call("GET", "/restaurants").json()
     check("restaurant list", body["restaurants"] == [{"id": "r_anker", "name": "Zum Anker", "timezone": "Europe/Berlin"}], str(body))
     detail = call("GET", "/restaurants/r_anker").json()
-    check("detail shape", detail == {**restaurant(), "combinable": []}, json.dumps(detail))
+    check("detail shape", detail == {**restaurant(), "combinable": [], "manager_user_ids": [], "revision": 1}, json.dumps(detail))
     expect("unknown restaurant", call("GET", "/restaurants/r_nope"), 404, "not_found")
 
     av = availability("r_anker", DATE, 2).json()
@@ -565,9 +565,9 @@ def test_concurrency():
     bodies = {r.body for r in out}
     check("idempotent race: one 201", counts.get(201) == 1 and counts.get(200) == 49, str(counts))
     check("idempotent race: identical bodies", len(bodies) == 1, str(len(bodies)))
-    check("idempotent race: one reservation", len(call("GET", "/reservations", token=tokens[0]).json()["reservations"]) == 1)
+    check("idempotent race: one reservation", len([r for r in call("GET", "/reservations", token=tokens[0]).json()["reservations"] if r["table_ids"] == ["t_3"]]) == 1)
     # cancel-and-rebook race
-    ref = call("GET", "/reservations", token=tokens[0]).json()["reservations"][0]["reference"]
+    ref = next(r for r in call("GET", "/reservations", token=tokens[0]).json()["reservations"] if r["table_ids"] == ["t_3"])["reference"]
     out = burst(lambda i: call("POST", f"/reservations/{ref}/cancel", token=tokens[0]) if i == 0 else book(tokens[i], table="t_3"), 50)
     counts = tally(out)
     check("cancel+rebook race: no 5xx, at most one winner", not any(s >= 500 or s == 0 for s in counts) and counts.get(201, 0) <= 1, str(counts))
@@ -730,6 +730,7 @@ def test_stage1_upgrade(stage1_url):
 
 def main():
     stage1_url = sys.argv[2].rstrip("/") if len(sys.argv) > 2 else None
+    stage2_url = sys.argv[3].rstrip("/") if len(sys.argv) > 3 else None
     test_health_and_routing()
     test_reset_and_auth()
     test_restaurants_and_availability()
@@ -745,6 +746,8 @@ def main():
         test_stage1_upgrade(stage1_url)
     else:
         print("note: no stage-1 URL given; upgrade import check skipped")
+    import stage3_smoke
+    stage3_smoke.run(sys.modules[__name__], stage1_url, stage2_url)
     print(f"\n{PASSES} checks passed, {len(FAILURES)} failed")
     sys.exit(1 if FAILURES else 0)
 
