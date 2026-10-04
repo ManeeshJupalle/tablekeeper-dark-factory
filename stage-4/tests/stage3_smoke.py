@@ -99,7 +99,7 @@ def fresh(restaurants=None, users=None, reservations=None):
 def test_policies():
     ada, bob = fresh()
     check, expect = s.check, s.expect
-    check("pol restaurant revision starts at 1", detail_rev() == 1)
+    check("pol restaurant revision starts at 0", detail_rev() == 0)
     expect("pol no token", s.call("POST", "/restaurants/r_anker/policies", body=policy(d(0)), key=s.new_key()), 401, "unauthenticated")
     expect("pol non-manager", publish(bob, policy(d(0))), 403, "forbidden")
     expect("pol unknown restaurant", publish(ada, policy(d(0)), rid="r_nope"), 404, "not_found")
@@ -129,7 +129,7 @@ def test_policies():
     for field in ("effective_from", "slot_minutes", "reservation_duration_minutes", "cancellation_cutoff_minutes", "opening_hours", "capacities"):
         body = {k: v for k, v in policy(d(0)).items() if k != field}
         expect(f"pol missing {field}", publish(ada, body), 422, "validation_failed")
-    check("pol invalid allocates nothing", s.call("GET", "/restaurants/r_anker/policies").json() == {"policies": []} and detail_rev() == 1)
+    check("pol invalid allocates nothing", s.call("GET", "/restaurants/r_anker/policies").json() == {"policies": []} and detail_rev() == 0)
 
     key = s.new_key()
     body1 = {**policy(d(0), reservation_duration_minutes=60), "souvenir": "ignored"}
@@ -137,7 +137,7 @@ def test_policies():
     check("pol v1 echo", p1 == {**policy(d(0), reservation_duration_minutes=60), "policy_version": 1}, json.dumps(p1))
     check("pol replay", s.expect("pol replay status", publish(ada, body1, key=key), 200).json() == p1)
     expect("pol key reuse", publish(ada, policy(d(0)), key=key), 409, "idempotency_key_reuse")
-    check("pol one restaurant revision", detail_rev() == 2)
+    check("pol one restaurant revision", detail_rev() == 1)
     p2 = expect("pol publish v2", publish(ada, policy(d(14), slot_minutes=60)), 201).json()
     p3 = expect("pol publish v3 earlier date", publish(ada, policy(d(-30), cancellation_cutoff_minutes=0)), 201).json()
     check("pol versions", [p1["policy_version"], p2["policy_version"], p3["policy_version"]] == [1, 2, 3])
@@ -452,22 +452,22 @@ def test_restaurant_revision():
     ada, _ = fresh()
     steps = []
     k = s.new_key()
-    b = book(ada, key=k).json(); steps.append(("create", 2))
-    book(ada, key=k); steps.append(("replay", 2))
-    book(ada); steps.append(("failed create", 2))
-    patch(ada, b["reference"], {"party_size": 3}); steps.append(("patch", 3))
-    patch(ada, b["reference"], {"party_size": 3}); steps.append(("no-op patch", 3))
-    s.call("POST", f"/reservations/{b['reference']}/cancel", token=ada); steps.append(("cancel", 4))
-    s.call("POST", f"/reservations/{b['reference']}/cancel", token=ada); steps.append(("cancel again", 4))
-    publish(ada, policy(d(30))); steps.append(("publish", 5))
-    publish(ada, policy(d(30), slot_minutes=0)); steps.append(("failed publish", 5))
-    a = book(ada, table="t_3", party=2).json(); steps.append(("create 2", 6))
-    series(ada, {"anchor_reference": a["reference"], "count": 2, "interval_weeks": 1}); steps.append(("series", 7))
+    b = book(ada, key=k).json(); steps.append(("create", 1))
+    book(ada, key=k); steps.append(("replay", 1))
+    book(ada); steps.append(("failed create", 1))
+    patch(ada, b["reference"], {"party_size": 3}); steps.append(("patch", 2))
+    patch(ada, b["reference"], {"party_size": 3}); steps.append(("no-op patch", 2))
+    s.call("POST", f"/reservations/{b['reference']}/cancel", token=ada); steps.append(("cancel", 3))
+    s.call("POST", f"/reservations/{b['reference']}/cancel", token=ada); steps.append(("cancel again", 3))
+    publish(ada, policy(d(30))); steps.append(("publish", 4))
+    publish(ada, policy(d(30), slot_minutes=0)); steps.append(("failed publish", 4))
+    a = book(ada, table="t_3", party=2).json(); steps.append(("create 2", 5))
+    series(ada, {"anchor_reference": a["reference"], "count": 2, "interval_weeks": 1}); steps.append(("series", 6))
     mk = s.new_key()
-    moves(ada, [{"reference": a["reference"], "party_size": 1}], key=mk); steps.append(("batch", 8))
-    moves(ada, [{"reference": a["reference"], "party_size": 1}], key=mk); steps.append(("batch replay", 8))
+    moves(ada, [{"reference": a["reference"], "party_size": 1}], key=mk); steps.append(("batch", 7))
+    moves(ada, [{"reference": a["reference"], "party_size": 1}], key=mk); steps.append(("batch replay", 7))
     rev = detail_rev()
-    s.check("restaurant revision sequence", rev == 8, f"got {rev}; expected after {steps[-1][0]}")
+    s.check("restaurant revision sequence", rev == 7, f"got {rev}; expected after {steps[-1][0]}")
 
 
 # ---- export / import --------------------------------------------------------------
@@ -509,7 +509,7 @@ def test_upgrade(label, base, with_pairs):
     s.expect(f"up {label} import", s.call("POST", "/_test/import", body=snap), 204)
     s.expect(f"up {label} token", s.call("GET", "/reservations", token=tok), 200)
     detail = s.call("GET", "/restaurants/r_anker").json()
-    s.check(f"up {label} restaurant", detail["revision"] == 1 and s.call("GET", "/restaurants/r_anker/policies").json() == {"policies": []})
+    s.check(f"up {label} restaurant", detail["revision"] == 0 and s.call("GET", "/restaurants/r_anker/policies").json() == {"policies": []})
     g = get(tok, r1["reference"])
     s.check(f"up {label} reservation", g["revision"] == 1 and g["accepted_terms"] == base_terms() and g["reservation_id"] == r1["reservation_id"]
             and g["created_at"] == r1["created_at"] and g["table_ids"] == ["t_2"], json.dumps(g))
