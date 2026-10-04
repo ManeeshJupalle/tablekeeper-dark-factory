@@ -147,18 +147,21 @@
       return { restaurantId: $('#restaurant').value, date: dateInput.value, party: $('#party').value.trim() };
     }
 
+    // A search never blocks the next one: the diner can change their mind while a
+    // response is outstanding. Every search is numbered and any response that is
+    // not for the latest one is dropped, so a late answer cannot restore old results.
     async function runSearch(params, keepForm) {
       const mine = ++seq;
-      if (!keepForm) { booking = null; clear(panel); }
+      const submit = $('[data-testid="search-button"]', form);
+      if (!keepForm) { booking = null; current = null; clear(panel); }
       if (!params.restaurantId || !params.date || !params.party) {
+        setBusy(submit, false);
         clear(results);
         results.append(el('p', { class: 'notice notice-error', role: 'alert', text: 'Please choose a restaurant, a date and a party size.' }));
         return;
       }
-      const submit = $('[data-testid="search-button"]', form);
-      submit.disabled = true; submit.textContent = 'Checking…';
-      results.setAttribute('aria-busy', 'true');
-      if (!keepForm) { clear(results); results.append(el('p', { class: 'loading', text: 'Checking availability…' })); }
+      setBusy(submit, true);
+      if (!keepForm) { clear(results); results.append(el('p', { class: 'loading', role: 'status', text: 'Checking availability…' })); }
       try {
         const q = '/availability?restaurant_id=' + encodeURIComponent(params.restaurantId) + '&date=' + encodeURIComponent(params.date) + '&party_size=' + encodeURIComponent(params.party);
         const [rest, avail] = await Promise.all([api('GET', '/restaurants/' + encodeURIComponent(params.restaurantId)), api('GET', q)]);
@@ -175,8 +178,16 @@
         clear(results);
         results.append(el('p', { class: 'notice notice-error', role: 'alert', text: 'We could not reach the server. Check your connection and try again.' }));
       } finally {
-        if (mine === seq) { submit.disabled = false; submit.textContent = 'Check availability'; results.removeAttribute('aria-busy'); }
+        if (mine === seq) setBusy(submit, false);
       }
+    }
+
+    // Loading is shown on the results and on the button, which stays clickable.
+    function setBusy(submit, busy) {
+      submit.classList.toggle('is-busy', busy);
+      submit.textContent = busy ? 'Checking…' : 'Check availability';
+      if (busy) results.setAttribute('aria-busy', 'true');
+      else results.removeAttribute('aria-busy');
     }
 
     function renderResults() {

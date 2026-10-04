@@ -87,6 +87,8 @@ input:focus, select:focus { border-color: var(--terracotta); outline: 3px solid 
 .btn-primary { background: var(--terracotta); color: #fff; }
 .btn-primary:hover { background: var(--terracotta-dark); }
 .btn-primary[disabled] { background: #c99a8b; cursor: progress; }
+.btn.is-busy { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.is-busy::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.45); border-top-color: #fff; animation: spin 0.8s linear infinite; flex: none; }
 .btn-secondary { background: transparent; color: var(--ink); border-color: var(--line-strong); }
 .btn-secondary:hover { background: var(--terracotta-soft); border-color: var(--terracotta); color: var(--terracotta-dark); }
 .btn-danger { background: transparent; color: var(--rose); border-color: var(--rose); }

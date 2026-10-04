@@ -141,6 +141,11 @@ func parseRestaurant(v any) (*Restaurant, *apiError) {
 		if e != nil {
 			return nil, e
 		}
+		// Pairs are unordered: a repeated or reversed entry declares nothing new,
+		// so only the first occurrence (and its order) is kept.
+		if r.pair(p[0], p[1]) != nil {
+			continue
+		}
 		r.Combinable = append(r.Combinable, p)
 	}
 	return r, nil
