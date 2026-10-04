@@ -1,0 +1,2059 @@
+{
+"track": "tablekeeper",
+"format_version": 1,
+"state": {
+"users": [
+{
+"id": "u_hana",
+"email": "hana@probe.test",
+"display_name": "Hana",
+"password_hash": "$2a$10$nIGcQktqnN9oxljaG9NIo.C8l6lDZJ7Y9//sDutZzgZBVYDj4bfMK"
+},
+{
+"id": "u_ravi",
+"email": "ravi@probe.test",
+"display_name": "Ravi",
+"password_hash": "$2a$10$01MI9ir5cgKuPh/oSA0/6OzPxXspilOPLV7CLDs5QnD.LuEoCOliK"
+},
+{
+"id": "u_mgr",
+"email": "mgr@probe.test",
+"display_name": "Morgan",
+"password_hash": "$2a$10$OFPEyO5gjh89pfCakRb3jucBueX4cTcXtkNfM3cTZEknFT880qFxm"
+}
+],
+"tokens": [
+{
+"token": "c62af7f74527bfe40c3cbb16db916b375bd3d1ed8c655ba9d6672e88078b6a2c",
+"user_id": "u_hana"
+},
+{
+"token": "eac46cc3eac4f8cc6b5a75e8c7981e0ae3b4b6aefa4ac630928c74f392cf3893",
+"user_id": "u_mgr"
+}
+],
+"restaurants": [
+{
+"id": "r_up3",
+"name": "Upgrade Hall",
+"timezone": "Europe/Berlin",
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"tables": [
+{
+"id": "u_a",
+"label": "Ash",
+"capacity": 2
+},
+{
+"id": "u_b",
+"label": "Birch",
+"capacity": 4
+},
+{
+"id": "u_c",
+"label": "Cedar",
+"capacity": 6
+},
+{
+"id": "u_d",
+"label": "Dogwood",
+"capacity": 4
+}
+],
+"combinable": [
+[
+"u_b",
+"u_a"
+]
+],
+"manager_user_ids": [
+"u_mgr"
+],
+"revision": 10,
+"policies": [
+{
+"effective_from": "2027-06-10",
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+},
+"policy_version": 1
+}
+]
+}
+],
+"reservations": [
+{
+"id": "res_up3_seed",
+"reference": "U3SEED",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_d"
+],
+"party_size": 3,
+"status": "confirmed",
+"starts_at_local": "2027-06-04T19:00",
+"starts_at": "2027-06-04T19:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_d"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-04T19:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 3
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_9f77b00840492f65",
+"reference": "54ACC77K",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_b"
+],
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T19:00",
+"starts_at": "2027-06-03T19:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 3,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_b"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-03T19:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 2
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+},
+{
+"seq": 2,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "changed",
+"changes": [
+{
+"field": "party_size",
+"from": 2,
+"to": 3
+}
+],
+"revision": 2,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+},
+{
+"seq": 3,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "changed",
+"changes": [
+{
+"field": "party_size",
+"from": 3,
+"to": 2
+}
+],
+"revision": 3,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_34bb9c56451234a1",
+"reference": "NJQOEWDS",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T18:00",
+"starts_at": "2027-06-03T18:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_c"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-03T18:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 4
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_b6e2414d5a77fc48",
+"reference": "DDF4PTCM",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-10T18:30",
+"starts_at": "2027-06-10T18:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 2,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_c"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-10T18:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 4
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+},
+{
+"seq": 2,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "changed",
+"changes": [
+{
+"field": "starts_at_local",
+"from": "2027-06-10T18:00",
+"to": "2027-06-10T18:30"
+}
+],
+"revision": 2,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_cdfa6b411326bb1b",
+"reference": "DM96FI08",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"party_size": 4,
+"status": "cancelled",
+"starts_at_local": "2027-06-17T18:00",
+"starts_at": "2027-06-17T18:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 2,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_c"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-17T18:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 4
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+},
+{
+"seq": 2,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "cancelled",
+"changes": [],
+"revision": 2,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_1da64d97069f86df",
+"reference": "FYYKIYFP",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-24T18:00",
+"starts_at": "2027-06-24T18:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_c"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-24T18:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 4
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+},
+{
+"id": "res_7416c0309756cdf3",
+"reference": "M423STN7",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_d"
+],
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T20:00",
+"starts_at": "2027-06-03T20:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+},
+"history": [
+{
+"seq": 1,
+"at": "2026-10-04T21:56:06+00:00",
+"event": "created",
+"changes": [
+{
+"field": "table_id",
+"from": null,
+"to": "u_d"
+},
+{
+"field": "starts_at_local",
+"from": null,
+"to": "2027-06-03T20:00"
+},
+{
+"field": "party_size",
+"from": null,
+"to": 2
+}
+],
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+}
+],
+"series": [
+{
+"id": "ser_048b2196ea78197a",
+"user_id": "u_hana",
+"restaurant_id": "r_up3",
+"revision": 3,
+"interval_weeks": 1,
+"occurrences": [
+{
+"index": 0,
+"reservation_id": "res_34bb9c56451234a1",
+"exception": false
+},
+{
+"index": 1,
+"reservation_id": "res_b6e2414d5a77fc48",
+"exception": true
+},
+{
+"index": 2,
+"reservation_id": "res_cdfa6b411326bb1b",
+"exception": false
+},
+{
+"index": 3,
+"reservation_id": "res_1da64d97069f86df",
+"exception": false
+}
+]
+}
+],
+"idempotency": [
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/series",
+"key": "s3-series-0d35edc504bd4dc8a3febba8ac3ea070",
+"body": "{\"anchor_reference\":\"NJQOEWDS\",\"count\":4,\"interval_weeks\":1}",
+"status": 201,
+"response": {
+"series_id": "ser_048b2196ea78197a",
+"revision": 1,
+"interval_weeks": 1,
+"occurrences": [
+{
+"index": 0,
+"reference": "NJQOEWDS",
+"exception": false,
+"reservation": {
+"reservation_id": "res_34bb9c56451234a1",
+"reference": "NJQOEWDS",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"table_id": "u_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T18:00",
+"starts_at": "2027-06-03T18:00:00+02:00",
+"ends_at": "2027-06-03T19:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+},
+{
+"index": 1,
+"reference": "DDF4PTCM",
+"exception": false,
+"reservation": {
+"reservation_id": "res_b6e2414d5a77fc48",
+"reference": "DDF4PTCM",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"table_id": "u_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-10T18:00",
+"starts_at": "2027-06-10T18:00:00+02:00",
+"ends_at": "2027-06-10T19:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+},
+{
+"index": 2,
+"reference": "DM96FI08",
+"exception": false,
+"reservation": {
+"reservation_id": "res_cdfa6b411326bb1b",
+"reference": "DM96FI08",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"table_id": "u_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-17T18:00",
+"starts_at": "2027-06-17T18:00:00+02:00",
+"ends_at": "2027-06-17T19:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+},
+{
+"index": 3,
+"reference": "FYYKIYFP",
+"exception": false,
+"reservation": {
+"reservation_id": "res_1da64d97069f86df",
+"reference": "FYYKIYFP",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"table_id": "u_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-24T18:00",
+"starts_at": "2027-06-24T18:00:00+02:00",
+"ends_at": "2027-06-24T19:00:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 1,
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+}
+]
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservation-moves",
+"key": "s3-batch-d005baaa415b460199da8771808e0dbe",
+"body": "{\"moves\":[{\"party_size\":2,\"reference\":\"54ACC77K\"}]}",
+"status": 201,
+"response": {
+"reservations": [
+{
+"reservation_id": "res_9f77b00840492f65",
+"reference": "54ACC77K",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_b"
+],
+"table_id": "u_b",
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T19:00",
+"starts_at": "2027-06-03T19:00:00+02:00",
+"ends_at": "2027-06-03T20:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 3,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+]
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservations",
+"key": "s3-lost-0d14c883e13d44d5b8c35899d65116fa",
+"body": "{\"party_size\":2,\"restaurant_id\":\"r_up3\",\"starts_at_local\":\"2027-06-03T20:00\",\"table_id\":\"u_d\"}",
+"status": 201,
+"response": {
+"reservation_id": "res_7416c0309756cdf3",
+"reference": "M423STN7",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_d"
+],
+"table_id": "u_d",
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T20:00",
+"starts_at": "2027-06-03T20:00:00+02:00",
+"ends_at": "2027-06-03T21:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+},
+{
+"user_id": "u_mgr",
+"method": "POST",
+"path": "/restaurants/r_up3/policies",
+"key": "s3-pol-a3abddfb4fae47f482c96900534dcede",
+"body": "{\"cancellation_cutoff_minutes\":120,\"capacities\":{\"u_a\":2,\"u_b\":4,\"u_c\":6,\"u_d\":4},\"effective_from\":\"2027-06-10\",\"opening_hours\":[{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"mon\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"tue\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"wed\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"thu\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"fri\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"sat\"},{\"closes\":\"23:00\",\"opens\":\"18:00\",\"weekday\":\"sun\"}],\"reservation_duration_minutes\":60,\"slot_minutes\":30}",
+"status": 201,
+"response": {
+"effective_from": "2027-06-10",
+"slot_minutes": 30,
+"reservation_duration_minutes": 60,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+},
+"policy_version": 1
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservations",
+"key": "s3-a-5dcb9c04ad584bec997f1423b490c5fc",
+"body": "{\"party_size\":2,\"restaurant_id\":\"r_up3\",\"starts_at_local\":\"2027-06-03T19:00\",\"table_id\":\"u_b\"}",
+"status": 201,
+"response": {
+"reservation_id": "res_9f77b00840492f65",
+"reference": "54ACC77K",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_b"
+],
+"table_id": "u_b",
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T19:00",
+"starts_at": "2027-06-03T19:00:00+02:00",
+"ends_at": "2027-06-03T20:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservations",
+"key": "s3-b-20ec0f904a744230b9067c79ac7148cd",
+"body": "{\"party_size\":4,\"restaurant_id\":\"r_up3\",\"starts_at_local\":\"2027-06-03T18:00\",\"table_id\":\"u_c\"}",
+"status": 201,
+"response": {
+"reservation_id": "res_34bb9c56451234a1",
+"reference": "NJQOEWDS",
+"restaurant_id": "r_up3",
+"table_ids": [
+"u_c"
+],
+"table_id": "u_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-06-03T18:00",
+"starts_at": "2027-06-03T18:00:00+02:00",
+"ends_at": "2027-06-03T19:30:00+02:00",
+"created_at": "2026-10-04T21:56:06+00:00",
+"revision": 1,
+"accepted_terms": {
+"policy_version": 0,
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "mon",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "tue",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "wed",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"capacities": {
+"u_a": 2,
+"u_b": 4,
+"u_c": 6,
+"u_d": 4
+}
+}
+}
+}
+]
+}
+}

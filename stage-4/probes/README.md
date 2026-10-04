@@ -1,14 +1,14 @@
-# Tablekeeper stage 3 - auditor probes
+# Tablekeeper stage 4 - auditor probes
 
-Black-box probes derived from the stage-1, stage-2 and stage-3 requirements alone. They never read
-the implementation. `CHECKLIST.md` lists every contract item (Part A: stage 1; Part B: stage 2; Part C: stage 3; all
-in force) with the probe id that covers it.
+Black-box probes derived from the stage-1 to stage-4 requirements alone. They never read
+the implementation. `CHECKLIST.md` lists every contract item (Part A: stage 1; Part B: stage 2; Part C: stage 3;
+Part D: stage 4; all in force) with the probe id that covers it.
 
 Two runners:
 
 | Runner | What it covers | Dependencies |
 |---|---|---|
-| `run_probes.py` | HTTP contract: all stage-1 and stage-2 groups, plus stage-3 explanations, policies and selection, accepted terms and revisions, `expected_revision`, history and decision, recurring series, collective moves under policies, restaurant revision, upgrade from genuine stage-1 and stage-2 exports, stage-3 round trip and concurrency | Python 3.11+, standard library only |
+| `run_probes.py` | HTTP contract: all stage-1 and stage-2 groups, stage-4 replans, plan application, closures, series amendments, upgrade from stage-3 exports and concurrency, plus stage-3 explanations, policies and selection, accepted terms and revisions, `expected_revision`, history and decision, recurring series, collective moves under policies, restaurant revision, upgrade from genuine stage-1 and stage-2 exports, stage-3 round trip and concurrency | Python 3.11+, standard library only |
 | `run_browser_probes.py` | The four screens, data-testid contract, out-of-order / 409 / lost-response recovery, upgrade in the browser, viewport and focus rules, and the same screens driven by a published stage-3 policy (UI-POL) | Python 3.11+, Playwright for Python with Chromium |
 
 ## Install (browser runner only)
@@ -21,7 +21,7 @@ The HTTP runner needs nothing installed.
 
 ## Run
 
-Start the stage-3 service, then from this directory:
+Start the stage-4 service, then from this directory:
 
 ```sh
 python3 run_probes.py --base-url http://127.0.0.1:8080
@@ -80,6 +80,20 @@ pair, a single and a later-cancelled table, recording a lost-response key, faili
 running a batch. `fixtures/stage2_export_expected.json` records the tokens, keys, bodies and
 original responses. The UPG3 group imports both the stage-1 and the stage-2 export into the
 stage-3 service. These files hold only throwaway probe credentials.
+
+## Stage-4 fixtures and conventions
+
+Stage-4 groups (RPV, OPT, LIM, APP, CLS, SAM, UPG4, RT4, CON4 over HTTP; UI-PLAN in the browser)
+add restaurant `r_plan` with per-case tables, pairs and seeded bookings whose references are chosen
+so the reference order is known; `r_combo` gains manager `u_mgr` for closure and browser checks.
+Every optimisation case is hand-computed and listed in CHECKLIST.md Part D with its expected plan.
+The restaurant revision starts at 0 (stage 4), so RREV-1, RREV-19 and UPG3-7 now expect 0.
+
+`fixtures/stage3_export.json` is a genuine export from the accepted stage-3 image (revision
+2586c6b) with a managed restaurant, a policy, an amended booking, a series with an exception and a
+cancelled occurrence, a batch receipt, a lost-response key and a failed key;
+`fixtures/stage3_export_expected.json` records tokens, keys, bodies, original responses,
+histories, the series and the restaurant revision. Throwaway probe credentials only.
 
 ## Known limits
 

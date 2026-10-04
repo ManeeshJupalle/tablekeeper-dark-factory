@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Tablekeeper stage 3 - browser probes (auditor seat).
+"""Tablekeeper stage 4 - browser probes (auditor seat).
 
 The stage-2 screen groups are kept unchanged; UI-POL drives the same screens with a published
-stage-3 booking policy (policy-driven grid, capacities, duration, closed days, recovery).
+stage-3 booking policy (policy-driven grid, capacities, duration, closed days, recovery);
+UI-PLAN checks that an applied stage-4 seating plan shows on the grid and the lookup screen.
 
 Usage:
     python3 run_browser_probes.py [--base-url http://127.0.0.1:8080] [--only GROUP,GROUP]
@@ -690,6 +691,60 @@ def g_policy_screens():
     ctx.close()
 
 
+@group("UI-PLAN")
+def g_plan_screens():
+    """Stage 4: an applied seating plan is reflected on the availability grid and the lookup screen."""
+    reset(rp.s4_fixture())
+    mgr = rp.login3("mgr")
+    hana = login("hana")
+    B = rp.must_book(hana, "r_combo", "c_b", T(THU, "19:00"), 2)
+    p = rp.must_plan(mgr, "r_combo", "c_b", rp.inst(THU, "19:00"), rp.inst(THU, "20:00"))
+    rp.must_apply(mgr, "r_combo", p["plan_id"])
+    for width in (1280, 375):
+        ctx, page = new_page(width=width, height=800)
+        ui_login(page, "hana@probe.test", "hana-secret-9")
+        ok = ui_search(page, "r_combo", THU, 2)
+        api = avail("r_combo", THU, 2)
+        probs = []
+        for s in api.json["slots"]:
+            hh = hhmm_of(s["starts_at_local"])
+            for t in ("c_a", "c_b", "c_c", "c_d"):
+                loc = tid(page, cell([t], hh))
+                exp = "true" if t in s["available_table_ids"] else "false"
+                if loc.count() != 1 or loc.first.get_attribute("data-available") != exp:
+                    probs.append("%s %r expected %s" % (cell([t], hh), loc.first.get_attribute("data-available") if loc.count() else None, exp))
+        check("UI-L1[%d]" % width, "after the plan the grid matches GET /availability at %d px" % width, ok and not probs, "; ".join(probs[:6]))
+        closed = [tid(page, cell(["c_b"], h)).first.get_attribute("data-available") for h in ("18:00", "18:30", "19:00", "19:30")]
+        check("UI-L2[%d]" % width, "the closed table's cells are unavailable for every slot overlapping the closure" , closed == ["false"] * 4, repr(closed))
+        pairs = [tid(page, cell(["c_b", x], h)) for x in ("c_a", "c_c") for h in ("18:00", "19:00", "19:30")]
+        check("UI-L3[%d]" % width, "pair cells containing the closed table are absent or unavailable during the closure",
+              all(c.count() == 0 or c.first.get_attribute("data-available") == "false" for c in pairs), "")
+        check("UI-L4[%d]" % width, "the moved booking's old table is free again once the closure ends (c_b 20:00 true) and its new table is taken (c_a 19:00 false)",
+              tid(page, cell(["c_b"], "20:00")).first.get_attribute("data-available") == "true"
+              and tid(page, cell(["c_a"], "19:00")).first.get_attribute("data-available") == "false", "")
+        sw, cw = page.evaluate("[document.scrollingElement.scrollWidth, document.scrollingElement.clientWidth]")
+        check("UI-L5[%d]" % width, "no horizontal scrolling at %d px with the plan applied" % width, sw <= cw, "scrollWidth=%s clientWidth=%s" % (sw, cw))
+        goto(page, "/lookup")
+        tid(page, "lookup-reference-input").fill(B["reference"])
+        tid(page, "lookup-submit").click()
+        ok = wait_visible(page, "reservation-detail")
+        tabs = text(page, "reservation-tables") or ""
+        check("UI-L6[%d]" % width, "lookup of the moved booking shows status confirmed and the new table (Alcove), not the closed one (Bay)",
+              ok and text(page, "reservation-status") == "confirmed" and "Alcove" in tabs and "Bay" not in tabs, repr(tabs))
+        ctx.close()
+    ctx, page = new_page()
+    ui_login(page, "hana@probe.test", "hana-secret-9")
+    ui_search(page, "r_combo", THU, 2)
+    tid(page, cell(["c_b"], "20:00")).first.click()
+    wait_visible(page, "booking-form")
+    tid(page, "booking-submit").first.click()
+    ok = wait_visible(page, "confirmation")
+    mine = [x for x in list_res(hana) if x.get("starts_at_local") == T(THU, "20:00") and x.get("table_ids") == ["c_b"]]
+    check("UI-L7", "booking the freed table right after the closure works through the screens (confirmation reference equals the API)",
+          ok and bool(mine) and text(page, "confirmation-reference") == mine[0]["reference"], repr(text(page, "confirmation-reference")))
+    ctx.close()
+
+
 @group("UI-VIEW")
 def g_viewport():
     reset(s2_fixture())
@@ -779,7 +834,7 @@ def main():
     args = ap.parse_args()
     rp.BASE = args.base_url.rstrip("/")
     only = {x.strip().upper() for x in args.only.split(",") if x.strip()}
-    print("# tablekeeper stage-3 browser probes against %s (THU=%s)" % (rp.BASE, THU))
+    print("# tablekeeper stage-4 browser probes against %s (THU=%s)" % (rp.BASE, THU))
     with sync_playwright() as pw:
         BROWSER = pw.chromium.launch(headless=True)
         for name, fn in GROUPS:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Tablekeeper stage 3 - black-box HTTP contract probes (auditor seat).
+"""Tablekeeper stage 4 - black-box HTTP contract probes (auditor seat).
 
 Stage-1 groups are kept in full; stage-2 groups (CFX, CAV, CRS, CID, CPT, CMV, CCN, UPG)
 and stage-3 groups (XPL, POL, PSEL, TRM, XRV, HIS, CHS, SER, SERX, SRV, CMV3, RREV, UPG3,
-RT3, CON3) follow. Browser probes live in run_browser_probes.py.
+RT3, CON3) and stage-4 groups (RPV, OPT, LIM, APP, CLS, SAM, UPG4, RT4, CON4) follow. Browser probes live in run_browser_probes.py.
 
 Usage:
     python3 run_probes.py [--base-url http://127.0.0.1:8080] [--only GROUP,GROUP]
@@ -2764,7 +2764,7 @@ def g_restaurant_revision():
     reset(s3_fixture())
     mgr, tok, ravi = login3("mgr"), login("hana"), login("ravi")
     revs = {r: rrev(r) for r in ("r_pol", "r_pol2", "r_lumen", "r_combo")}
-    check("RREV-1", "after reset every restaurant detail carries revision 1 (integer)", all(type(v) is int and v == 1 for v in revs.values()), repr(revs))
+    check("RREV-1", "after reset every restaurant detail carries revision 0 (integer; stage 4 starts it at 0)", all(type(v) is int and v == 0 for v in revs.values()), repr(revs))
 
     def step(cid, desc, fn, delta):
         b = rrev("r_pol")
@@ -2800,7 +2800,7 @@ def g_restaurant_revision():
     step("RREV-16", "a failed batch does not change it", lambda: moves(tok, [{"reference": bs[0]["reference"], "party_size": 99}]), 0)
     step("RREV-17", "a cancel increments it by 1", lambda: cancel(tok, ref), 1)
     step("RREV-18", "a repeated cancel does not change it", lambda: cancel(tok, ref), 0)
-    check("RREV-19", "other restaurants are unaffected (r_pol2 still 1)", rrev("r_pol2") == 1, repr(rrev("r_pol2")))
+    check("RREV-19", "other restaurants are unaffected (r_pol2 still 0)", rrev("r_pol2") == 0, repr(rrev("r_pol2")))
 
 
 @group("UPG3")
@@ -2836,7 +2836,7 @@ def g_upgrade3():
         check("UPG3-6[%s]" % tag, "decision works for every imported booking (revision 1, policy-0 terms)",
               all(d.status == 200 and d.json.get("revision") == 1 and terms_eq(d.json.get("accepted_terms"), T0) for d in ds), "")
         pl = get_policies("r_combo")
-        check("UPG3-7[%s]" % tag, "after import the policies list is empty and the restaurant revision is 1", pl.status == 200 and pl.json == {"policies": []} and rrev("r_combo") == 1, repr((pl, rrev("r_combo"))))
+        check("UPG3-7[%s]" % tag, "after import the policies list is empty and the restaurant revision is 0 (stage 4)", pl.status == 200 and pl.json == {"policies": []} and rrev("r_combo") == 0, repr((pl, rrev("r_combo"))))
         expect_err("UPG3-8[%s]" % tag, "an imported restaurant has no managers: publication is 403 forbidden",
                    publish(tokH, policy(DAY(7), caps=T0["capacities"]), rid="r_combo"), 403, "forbidden")
         lg = call("POST", "/auth/login", body={"email": "hana@probe.test", "password": "hana-secret-9"})
@@ -3028,6 +3028,798 @@ def g_concurrency3():
           len(c201) == 1 and len(c200) == 11 and all(same_json(x.json, c201[0].json) for x in c200), repr([x.status for x in oks]))
 
 
+# --------------------------------------------------------------------------- stage-4 fixtures and helpers
+
+def plan_restaurant(rid, tables, combinable=(), managers=("u_mgr",), name=None):
+    return {"id": rid, "name": name or rid.replace("_", " ").title(), "timezone": "Europe/Berlin", "slot_minutes": 30,
+            "reservation_duration_minutes": 90, "cancellation_cutoff_minutes": 120,
+            "opening_hours": hours(ALL_DAYS, "18:00", "23:00"),
+            "tables": [{"id": t, "label": t.upper(), "capacity": c} for t, c in tables],
+            "combinable": [list(p) for p in combinable], "manager_user_ids": list(managers)}
+
+
+V_TABLES = [("v1", 4), ("v2", 4), ("v3", 6)]
+
+
+def s4_fixture(extra_restaurants=(), reservations=None):
+    fx = s3_fixture(reservations)
+    for r in fx["restaurants"]:
+        if r["id"] == "r_combo":
+            r["manager_user_ids"] = ["u_mgr"]
+    fx["restaurants"] += list(extra_restaurants)
+    return fx
+
+
+def seed(ref, table_ids, local, party, rid="r_plan", user="u_hana", status=None):
+    d = {"id": "res_" + ref.lower(), "reference": ref, "user_id": user, "restaurant_id": rid,
+         "starts_at_local": local, "party_size": party}
+    if len(table_ids) == 1:
+        d["table_id"] = table_ids[0]
+    else:
+        d["table_ids"] = list(table_ids)
+    if status:
+        d["status"] = status
+    return d
+
+
+def inst(date, hhmm):
+    return T(date, hhmm) + ":00" + berlin_evening_offset(dt.date.fromisoformat(D(date)))
+
+
+def inst_utc(date, hhmm):
+    return dt.datetime.fromisoformat(inst(date, hhmm)).astimezone(dt.timezone.utc).isoformat()
+
+
+def same_instant(a, b):
+    try:
+        return parse_ts(a) == parse_ts(b)
+    except Exception:  # noqa
+        return False
+
+
+def replan(token, rid, table_id, frm, to, key=None, extra=None, **kw):
+    body = {"table_id": table_id, "from": frm, "to": to}
+    if extra:
+        body.update(extra)
+    return call("POST", "/restaurants/%s/replans" % rid, body=body, token=token, key=newkey() if key is None else key, **kw)
+
+
+def apply_plan(token, rid, pid, key=None, body=None, **kw):
+    return call("POST", "/restaurants/%s/replans/%s/apply" % (rid, pid), body={} if body is None else body, token=token,
+                key=newkey() if key is None else key, **kw)
+
+
+def must_plan(token, rid, table_id, frm, to):
+    r = replan(token, rid, table_id, frm, to)
+    if r.status != 201:
+        raise RuntimeError("setup replan failed: %r" % r)
+    return r.json
+
+
+def must_apply(token, rid, pid):
+    r = apply_plan(token, rid, pid)
+    if r.status != 201:
+        raise RuntimeError("setup apply failed: %r" % r)
+    return r.json
+
+
+def amend(token, sid, exp_rev, from_index, local_time, key=None, extra=None, body=None, **kw):
+    b = {"expected_revision": exp_rev, "from_index": from_index, "local_time": local_time} if body is None else body
+    if extra:
+        b = dict(b, **extra)
+    return call("POST", "/series/%s/amend" % sid, body=b, token=token, key=newkey() if key is None else key, **kw)
+
+
+def assignment_map(resp):
+    if resp.status != 201 or not isinstance(resp.json, dict):
+        return None
+    return {a.get("reference"): (sorted(a.get("table_ids") or []), a.get("changed")) for a in resp.json.get("assignments", [])}
+
+
+def plan_problems(resp, table_id, frm, to):
+    j = resp.json if isinstance(resp.json, dict) else {}
+    p = []
+    if not isinstance(j.get("plan_id"), str) or not j.get("plan_id"):
+        p.append("plan_id %r" % j.get("plan_id"))
+    if type(j.get("restaurant_revision")) is not int:
+        p.append("restaurant_revision %r" % j.get("restaurant_revision"))
+    c = j.get("closure") or {}
+    if c.get("table_id") != table_id or not same_instant(c.get("from"), frm) or not same_instant(c.get("to"), to):
+        p.append("closure %r" % c)
+    a = j.get("assignments")
+    if not isinstance(a, list):
+        return p + ["assignments %r" % a]
+    refs = [x.get("reference") for x in a]
+    if refs != sorted(refs):
+        p.append("assignments not in reference order %r" % refs)
+    for x in a:
+        if not isinstance(x.get("table_ids"), list) or not isinstance(x.get("changed"), bool):
+            p.append("assignment malformed %r" % x)
+    if j.get("moved_count") != sum(1 for x in a if x.get("changed") is True):
+        p.append("moved_count %r" % j.get("moved_count"))
+    if type(j.get("unused_seats")) is not int:
+        p.append("unused_seats %r" % j.get("unused_seats"))
+    return p
+
+
+def opt_case(cid, desc, tables, comb, seeds, table_id, frm, to, exp, moved, unused, before=None):
+    reset(s4_fixture([plan_restaurant("r_plan", tables, comb)], seeds))
+    mgr = login3("mgr")
+    if before:
+        before(mgr)
+    r = replan(mgr, "r_plan", table_id, frm, to)
+    got = assignment_map(r)
+    want = {k: (sorted(v[0]), v[1]) for k, v in exp.items()}
+    j = r.json if isinstance(r.json, dict) else {}
+    check(cid, desc, r.status == 201 and got == want and j.get("moved_count") == moved and j.get("unused_seats") == unused,
+          "status=%s got=%r moved=%r unused=%r expected=%r/%r/%r" % (r.status, got, j.get("moved_count"), j.get("unused_seats"), want, moved, unused))
+    return r, mgr
+
+
+def snapshot_bookings(token, refs):
+    return ([get_res(token, x).json for x in refs], [entries(token, x) for x in refs])
+
+
+DAYTIME = ("18:00", "23:00")
+
+
+# =========================================================================== stage-4 groups
+
+@group("RPV")
+def g_replan_preview():
+    seeds = [seed("VP0001", ["v1"], T(THU, "19:00"), 4), seed("VQ0001", ["v3"], T(THU, "19:00"), 2),
+             seed("VS0001", ["v3"], T(THU, "21:30"), 2)]
+    reset(s4_fixture([plan_restaurant("r_plan", V_TABLES, [["v2", "v3"]]),
+                      plan_restaurant("r_plan2", [("w1", 4), ("w2", 4)])], seeds))
+    mgr, mgr2, hana = login3("mgr"), login3("mgr2"), login("hana")
+    S = must_adopt(hana, "VS0001", 2, 1)
+    frm, to = inst(THU, "18:00"), inst(THU, "21:00")
+    expect_err("RPV-1", "preview without a token is 401", call("POST", "/restaurants/r_plan/replans", body={"table_id": "v1", "from": frm, "to": to}, key=newkey()), 401, "unauthenticated")
+    expect_err("RPV-2", "preview for an unknown restaurant is 404", replan(mgr, "r_nope", "v1", frm, to), 404, "not_found")
+    expect_err("RPV-3a", "a diner (non-manager) is 403 forbidden", replan(hana, "r_plan", "v1", frm, to), 403, "forbidden")
+    expect_err("RPV-3b", "the manager of another restaurant is 403 forbidden", replan(mgr2, "r_plan", "v1", frm, to), 403, "forbidden")
+    expect_err("RPV-4a", "missing Idempotency-Key is 400", call("POST", "/restaurants/r_plan/replans", body={"table_id": "v1", "from": frm, "to": to}, token=mgr), 400, "missing_idempotency_key")
+    expect_err("RPV-4b", "empty Idempotency-Key is 400", replan(mgr, "r_plan", "v1", frm, to, key=""), 400, "missing_idempotency_key")
+    expect_err("RPV-4c", "256-character key is 422", replan(mgr, "r_plan", "v1", frm, to, key="r" * 256), 422, "validation_failed")
+    noff = T(THU, "18:00") + ":00"
+    for label, f, t in [("from without offset", noff, to), ("to without offset", frm, T(THU, "21:00") + ":00"),
+                        ("from equal to to", frm, frm), ("from after to", to, frm), ("unparseable from", "tomorrow evening", to),
+                        ("date-only from", D(THU), to), ("local minute-only from", T(THU, "18:00"), to)]:
+        expect_err("RPV-5[%s]" % label, "invalid interval (%s) is 422 validation_failed" % label, replan(mgr, "r_plan", "v1", f, t), 422, "validation_failed")
+    for f in ("table_id", "from", "to"):
+        b = {"table_id": "v1", "from": frm, "to": to}
+        del b[f]
+        expect_err("RPV-5[missing %s]" % f, "missing %s is 422 validation_failed" % f, call("POST", "/restaurants/r_plan/replans", body=b, token=mgr, key=newkey()), 422, "validation_failed")
+    r = replan(mgr, "r_plan", 7, frm, to)
+    check("RPV-5b", "table_id of the wrong JSON type is refused with 400 malformed_request or 422 validation_failed",
+          any_status(r, ((400, "malformed_request"), (422, "validation_failed"))), repr(r))
+    expect_err("RPV-6a", "unknown table is 404 not_found", replan(mgr, "r_plan", "v9", frm, to), 404, "not_found")
+    expect_err("RPV-6b", "another restaurant's table is 404 not_found", replan(mgr, "r_plan", "w1", frm, to), 404, "not_found")
+    zr = replan(mgr, "r_plan", "v1", inst_utc(THU, "18:00").replace("+00:00", "Z"), to)
+    check("RPV-6c", "a Z-suffixed instant is either accepted as UTC (closure echoes the same instant) or refused with 422",
+          (zr.status == 201 and same_instant((zr.json.get("closure") or {}).get("from"), frm)) or (zr.status == 422 and zr.code == "validation_failed"), repr(zr)[:300])
+    names = [x["reference"] for x in list_res(hana)]
+    snap = (avail("r_plan", THU, 1, explain="true").json, [get_res(hana, x).json for x in names], [entries(hana, x) for x in names],
+            rrev("r_plan"), get_series(hana, S["series_id"]).json)
+    k = newkey()
+    r = replan(mgr, "r_plan", "v1", frm, to, key=k)
+    probs = plan_problems(r, "v1", frm, to)
+    check("RPV-7", "preview is 201 with plan_id, restaurant_revision, the closure echoed as instants, assignments in reference order, consistent moved_count",
+          r.status == 201 and not probs, "status=%s %s" % (r.status, "; ".join(probs)))
+    check("RPV-8", "restaurant_revision equals GET /restaurants/{id}.revision at that moment", r.status == 201 and r.json.get("restaurant_revision") == rrev("r_plan"), "%r vs %r" % ((r.json or {}).get("restaurant_revision"), rrev("r_plan")))
+    check("RPV-9", "considered bookings are exactly those overlapping [from, to) on any table; VP moves to v2, VQ stays on v3; moved 1, unused 4",
+          assignment_map(r) == {"VP0001": (["v2"], True), "VQ0001": (["v3"], False)} and r.json.get("moved_count") == 1 and r.json.get("unused_seats") == 4, repr(r.json)[:300])
+    after = (avail("r_plan", THU, 1, explain="true").json, [get_res(hana, x).json for x in names], [entries(hana, x) for x in names],
+             rrev("r_plan"), get_series(hana, S["series_id"]).json)
+    check("RPV-10", "a preview changes nothing (availability with explain, bodies, histories, restaurant revision, series)", same_json(after, snap), "")
+    rep = replan(mgr, "r_plan", "v1", frm, to, key=k)
+    check("RPV-11", "a replay is 200 with an identical body", rep.status == 200 and same_json(rep.json, r.json), repr(rep)[:200])
+    expect_err("RPV-12a", "same key with a different body is 409 idempotency_key_reuse", replan(mgr, "r_plan", "v2", frm, to, key=k), 409, "idempotency_key_reuse")
+    expect_err("RPV-12b", "same key with a different, invalid body is 409 idempotency_key_reuse", replan(mgr, "r_plan", "v1", to, frm, key=k), 409, "idempotency_key_reuse")
+    r2 = replan(mgr, "r_plan", "v1", inst_utc(THU, "18:00"), inst_utc(THU, "21:00"))
+    check("RPV-13", "the same closure written with UTC offsets is compared as instants and gives the same assignments",
+          r2.status == 201 and assignment_map(r2) == assignment_map(r) and r2.json.get("unused_seats") == r.json.get("unused_seats"), repr(r2)[:200])
+    r3 = replan(mgr, "r_plan", "v1", frm, to, extra={"note": "ignored", "priority": 3})
+    check("RPV-14", "unknown fields are ignored (201)", r3.status == 201 and assignment_map(r3) == assignment_map(r), repr(r3)[:200])
+    for label, bad in [("422", {"from": to, "to": frm}), ("404", {"table_id": "v9"})]:
+        kk = newkey()
+        b = dict({"table_id": "v1", "from": frm, "to": to}, **bad)
+        f1 = call("POST", "/restaurants/r_plan/replans", body=b, token=mgr, key=kk)
+        f2 = replan(mgr, "r_plan", "v1", frm, to, key=kk)
+        check("RPV-15[%s]" % label, "a key whose preview failed with %s is a first use afterwards (201)" % label, f1.status == int(label) and f2.status == 201, "%r %r" % (f1, f2))
+    pa = must_plan(mgr, "r_plan", "v1", frm, to)
+    pb = must_plan(mgr, "r_plan", "v3", inst(THU, "21:00"), inst(THU, "23:00"))
+    a = apply_plan(mgr, "r_plan", pa["plan_id"])
+    check("RPV-16", "two previews with different keys both succeed and the first stays applicable (201)", a.status == 201, repr(a)[:200])
+    expect_err("RPV-17", "after that application the second preview is stale (409 stale_plan)", apply_plan(mgr, "r_plan", pb["plan_id"]), 409, "stale_plan")
+
+
+@group("OPT")
+def g_optimisation():
+    TH = lambda hh: T(THU, hh)  # noqa: E731
+    day = (inst(THU, "18:00"), inst(THU, "23:00"))
+    opt_case("OPT-A", "criterion 1: moving one booking (X to a2, 6 unused) beats moving two (X to a3, Y to a5, 0 unused)",
+             [("a1", 2), ("a2", 8), ("a3", 2), ("a5", 1)], [], [seed("AX0001", ["a1"], TH("19:00"), 2), seed("AY0001", ["a3"], TH("19:00"), 1)],
+             "a1", *day, {"AX0001": (["a2"], True), "AY0001": (["a3"], False)}, 1, 7)
+    opt_case("OPT-B", "criterion 2 over rank: the tight single b3 (rank 2, 0 unused) beats the larger b2 (rank 1, 4 unused)",
+             [("b1", 4), ("b2", 8), ("b3", 4)], [], [seed("BX0001", ["b1"], TH("19:00"), 4)],
+             "b1", *day, {"BX0001": (["b3"], True)}, 1, 0)
+    opt_case("OPT-C", "criterion 2 among pairs: the tighter later-declared pair c2+c3 (0 unused) beats c2+c4 (2 unused); no single seats 6",
+             [("c1", 6), ("c2", 4), ("c3", 2), ("c4", 4)], [["c2", "c4"], ["c2", "c3"]], [seed("CX0001", ["c1"], TH("19:00"), 6)],
+             "c1", *day, {"CX0001": (["c2", "c3"], True)}, 1, 0)
+    opt_case("OPT-D", "criterion 3 and stay-put: equal seats go to the lowest rank (d2) for both movers; DQ stays on d3 although d2 is free",
+             [("d1", 4), ("d2", 4), ("d3", 4), ("d4", 4)], [],
+             [seed("DP0001", ["d1"], TH("19:00"), 4), seed("DQ0001", ["d3"], TH("19:00"), 4), seed("DR0001", ["d1"], TH("21:00"), 4)],
+             "d1", *day, {"DP0001": (["d2"], True), "DQ0001": (["d3"], False), "DR0001": (["d2"], True)}, 2, 0)
+    opt_case("OPT-E", "capacity is judged under the booking's own accepted terms (e2 seats 4 under policy 0 although the newer policy says 2)",
+             [("e1", 4), ("e2", 4), ("e3", 2)], [], [seed("EP0001", ["e1"], TH("19:00"), 4)],
+             "e1", *day, {"EP0001": (["e2"], True)}, 1, 0,
+             before=lambda mgr: must_publish(mgr, policy(THU, caps={"e1": 4, "e2": 2, "e3": 6}), rid="r_plan"))
+    opt_case("OPT-F1", "a declared pair is used when no single fits (f2+f3)",
+             [("f1", 4), ("f2", 2), ("f3", 2), ("f4", 2)], [["f2", "f3"]], [seed("FP0001", ["f1"], TH("19:00"), 4)],
+             "f1", *day, {"FP0001": (["f2", "f3"], True)}, 1, 0)
+    reset(s4_fixture([plan_restaurant("r_plan", [("f1", 4), ("f2", 2), ("f3", 2), ("f4", 2)], [["f2", "f3"]])],
+                     [seed("FP0001", ["f1"], TH("19:00"), 4), seed("FG0001", ["f2"], TH("20:00"), 2)]))
+    mgr = login3("mgr")
+    rv = rrev("r_plan")
+    k = newkey()
+    r = replan(mgr, "r_plan", "f1", inst(THU, "19:00"), inst(THU, "19:30"), key=k)
+    expect_err("OPT-F2", "an undeclared pair (f3+f4) is never used and a fixed booking blocks f2 during the overlap: 409 no_feasible_plan", r, 409, "no_feasible_plan")
+    check("OPT-F3", "no_feasible_plan changed nothing (restaurant revision)", rrev("r_plan") == rv, "")
+    r = replan(mgr, "r_plan", "f4", inst(THU, "19:00"), inst(THU, "19:30"), key=k)
+    check("OPT-F4", "the key of the infeasible preview is reusable (201)", r.status == 201, repr(r)[:200])
+    opt_case("OPT-G", "a fixed booking outside the closure (g2 at 20:00) blocks g2 during the overlap, so GP takes g3 (2 unused); the fixed booking is not considered",
+             [("g1", 4), ("g2", 4), ("g3", 6)], [], [seed("GP0001", ["g1"], TH("19:00"), 4), seed("GF0001", ["g2"], TH("20:00"), 2)],
+             "g1", inst(THU, "19:00"), inst(THU, "19:30"), {"GP0001": (["g3"], True)}, 1, 2)
+
+    def close_h1(mgr):
+        p = must_plan(mgr, "r_plan", "h1", *day)
+        must_apply(mgr, "r_plan", p["plan_id"])
+    opt_case("OPT-H", "a previously applied closure (h1) blocks its table for a later plan: HP takes h3 (2 unused)",
+             [("h1", 4), ("h2", 4), ("h3", 6)], [], [seed("HP0001", ["h2"], TH("19:00"), 4)],
+             "h2", *day, {"HP0001": (["h3"], True)}, 1, 2, before=close_h1)
+    reset(s4_fixture([plan_restaurant("r_plan", [("i1", 4), ("i2", 2)])], [seed("IP0001", ["i1"], TH("19:00"), 4)]))
+    mgr, hana = login3("mgr"), login("hana")
+    before = (rrev("r_plan"), get_res(hana, "IP0001").json, entries(hana, "IP0001"), avail("r_plan", THU, 1).json)
+    k = newkey()
+    expect_err("OPT-I1", "no table or declared pair seats IP: 409 no_feasible_plan", replan(mgr, "r_plan", "i1", *day, key=k), 409, "no_feasible_plan")
+    check("OPT-I2", "no_feasible_plan changed nothing (revision, booking, history, availability)",
+          same_json((rrev("r_plan"), get_res(hana, "IP0001").json, entries(hana, "IP0001"), avail("r_plan", THU, 1).json), before), "")
+    r = replan(mgr, "r_plan", "i2", *day, key=k)
+    check("OPT-I3", "the same key with a feasible body is then a first use (201, IP considered and unchanged)",
+          r.status == 201 and assignment_map(r) == {"IP0001": (["i1"], False)}, repr(r)[:200])
+    opt_case("OPT-J", "when the only seat for JP (j2) is occupied by a smaller party, that party moves too (2 moves, 0 unused)",
+             [("j1", 6), ("j2", 6), ("j3", 2)], [], [seed("JP0001", ["j1"], TH("19:00"), 6), seed("JQ0001", ["j2"], TH("19:00"), 2)],
+             "j1", *day, {"JP0001": (["j2"], True), "JQ0001": (["j3"], True)}, 2, 0)
+    opt_case("OPT-K1", "with equal unused seats a single (k2, rank 1) beats a declared pair (k3+k4, rank 4)",
+             [("k1", 4), ("k2", 4), ("k3", 2), ("k4", 2)], [["k3", "k4"]], [seed("KP0001", ["k1"], TH("19:00"), 4)],
+             "k1", *day, {"KP0001": (["k2"], True)}, 1, 0)
+    opt_case("OPT-K2", "when the single is taken the pair (rank after all singles) is chosen rather than moving the occupant",
+             [("k1", 4), ("k2", 4), ("k3", 2), ("k4", 2)], [["k3", "k4"]],
+             [seed("KP0001", ["k1"], TH("19:00"), 4), seed("KQ0001", ["k2"], TH("19:00"), 4)],
+             "k1", *day, {"KP0001": (["k3", "k4"], True), "KQ0001": (["k2"], False)}, 1, 0)
+    seeds = [seed("SA0001", ["g2"], TH("18:00"), 2), seed("SB0001", ["g3"], TH("21:00"), 2), seed("SC0001", ["g1"], TH("18:00"), 2),
+             seed("SD0001", ["g2"], TH("20:00"), 2), seed("SE0001", ["g1"], TH("19:30"), 2), seed("SZ0001", ["g3"], TH("19:30"), 2, status="cancelled")]
+    r, mgr = opt_case("OPT-L", "considered set: ends at from, starts at to, a non-overlapping booking on the closed table and a cancelled booking are not considered",
+                      [("g1", 2), ("g2", 2), ("g3", 6)], [], seeds, "g1", inst(THU, "19:30"), inst(THU, "21:00"),
+                      {"SD0001": (["g2"], False), "SE0001": (["g3"], True)}, 1, 4)
+    hana = login("hana")
+    if r.status == 201:
+        must_apply(mgr, "r_plan", r.json["plan_id"])
+    check("OPT-L2", "after applying, bookings outside the closure keep their table and revision (SC on the closed table, SA, SB)",
+          all(get_res(hana, x).json.get("revision") == 1 for x in ("SA0001", "SB0001", "SC0001")) and get_res(hana, "SC0001").json.get("table_ids") == ["g1"], "")
+
+
+@group("LIM")
+def g_planning_limits():
+    TH = lambda hh: T(THU, hh)  # noqa: E731
+    tables = [("l1", 2), ("l2", 2), ("l3", 4), ("l4", 4), ("l5", 6), ("l6", 6)]
+    pairs = [["l1", "l2"], ["l3", "l4"], ["l1", "l3"], ["l2", "l4"]]
+    seeds = [seed("LA0001", ["l2"], TH("19:00"), 2), seed("LB0001", ["l3"], TH("19:00"), 4), seed("LC0001", ["l4"], TH("19:00"), 4),
+             seed("LD0001", ["l5"], TH("19:00"), 6), seed("LE0001", ["l6"], TH("19:00"), 6), seed("LP0001", ["l1"], TH("21:30"), 2)]
+    want = {"LA0001": (["l2"], False), "LB0001": (["l3"], False), "LC0001": (["l4"], False), "LD0001": (["l5"], False),
+            "LE0001": (["l6"], False), "LP0001": (["l2"], True)}
+    opt_case("LIM-1", "6 tables, 4 declared pairs and 6 considered bookings give the exact optimum (LP to l2, others stay)",
+             tables, pairs, seeds, "l1", inst(THU, "18:00"), inst(THU, "23:00"), want, 1, 0)
+    for cid, label, tb, pr, sd, w in [
+            ("LIM-2", "7 tables", tables + [("l7", 2)], pairs, seeds, want),
+            ("LIM-3", "5 declared pairs", tables, pairs + [["l5", "l6"]], seeds, want),
+            ("LIM-4", "7 considered bookings", tables, pairs, seeds + [seed("LF0001", ["l3"], TH("21:30"), 2)], dict(want, LF0001=(["l3"], False)))]:
+        reset(s4_fixture([plan_restaurant("r_plan", tb, pr)], sd))
+        mgr = login3("mgr")
+        rv = rrev("r_plan")
+        r = replan(mgr, "r_plan", "l1", inst(THU, "18:00"), inst(THU, "23:00"))
+        ok = (r.status == 422 and r.code == "planning_limit" and rrev("r_plan") == rv) or (r.status == 201 and assignment_map(r) == {k: (sorted(v[0]), v[1]) for k, v in w.items()})
+        check(cid, "%s beyond the limit: 422 planning_limit with nothing changed, or the exact optimum" % label, ok, repr(r)[:300])
+
+
+def apply_fixture():
+    seeds = [seed("VP0001", ["v1"], T(THU, "19:00"), 4), seed("VQ0001", ["v3"], T(THU, "19:00"), 2),
+             seed("VS0001", ["v3"], T(THU, "21:30"), 2)]
+    return s4_fixture([plan_restaurant("r_plan", V_TABLES, [["v2", "v3"]]),
+                       plan_restaurant("r_plan2", [("w1", 4), ("w2", 4)])], seeds)
+
+
+@group("APP")
+def g_apply():
+    reset(apply_fixture())
+    mgr, hana, mgr2 = login3("mgr"), login("hana"), login3("mgr2")
+    frm, to = inst(THU, "18:00"), inst(THU, "21:00")
+    before = {x: (get_res(hana, x).json, entries(hana, x)) for x in ("VP0001", "VQ0001")}
+    P = must_plan(mgr, "r_plan", "v1", frm, to)
+    pid = P["plan_id"]
+    other = must_plan(mgr, "r_plan", "v1", frm, to)
+    expect_err("APP-1", "apply without a token is 401", call("POST", "/restaurants/r_plan/replans/%s/apply" % pid, body={}, key=newkey()), 401, "unauthenticated")
+    expect_err("APP-2a", "apply of an unknown plan is 404", apply_plan(mgr, "r_plan", "no-such-plan"), 404, "not_found")
+    expect_err("APP-2b", "apply of a plan through another restaurant is 404", apply_plan(mgr, "r_plan2", pid), 404, "not_found")
+    expect_err("APP-3", "a diner (non-manager) is 403 forbidden", apply_plan(hana, "r_plan", pid), 403, "forbidden")
+    expect_err("APP-4", "missing Idempotency-Key is 400", call("POST", "/restaurants/r_plan/replans/%s/apply" % pid, body={}, token=mgr), 400, "missing_idempotency_key")
+    check("APP-4b", "refused applications changed nothing", all(same_json((get_res(hana, x).json, entries(hana, x)), v) for x, v in before.items()) and rrev("r_plan") == P["restaurant_revision"], "")
+    k = newkey()
+    A = apply_plan(mgr, "r_plan", pid, key=k)
+    ok = A.status == 201 and isinstance(A.json, dict) and A.json.get("plan_id") == pid and A.json.get("restaurant_revision") == P["restaurant_revision"] + 1 \
+        and A.json.get("restaurant_revision") == rrev("r_plan") and [x.get("reference") for x in A.json.get("reservations", [])] == ["VP0001", "VQ0001"]
+    check("APP-5", "apply is 201 with plan_id, restaurant_revision = preview + 1 (equal to the detail), reservations of every considered booking in reference order", ok, repr(A)[:300])
+    if A.status != 201:
+        return
+    vp, vq = A.json["reservations"]
+    bp = before["VP0001"][0]
+    check("APP-6", "the moved booking: revision +1, table_ids [v2] with table_id v2, identical times, party and accepted terms",
+          not res_problems(vp) and vp.get("revision") == bp["revision"] + 1 and vp.get("table_ids") == ["v2"] and vp.get("table_id") == "v2"
+          and all(vp.get(f) == bp.get(f) for f in ("reference", "reservation_id", "starts_at_local", "starts_at", "ends_at", "party_size", "created_at", "status"))
+          and same_json(vp.get("accepted_terms"), bp.get("accepted_terms")), repr(vp))
+    check("APP-7", "the unmoved considered booking is returned unchanged", same_json(vq, before["VQ0001"][0]), repr(vq))
+    es = entries(hana, "VP0001") or []
+    last = es[-1] if es else {}
+    check("APP-8", "the moved booking gains one reassigned entry: table_ids change with complete lists, plan_id, resulting revision, unchanged terms",
+          len(es) == len(before["VP0001"][1]) + 1 and last.get("event") == "reassigned" and last.get("changes") == [{"field": "table_ids", "from": ["v1"], "to": ["v2"]}]
+          and last.get("plan_id") == pid and last.get("revision") == vp.get("revision") and same_json(last.get("accepted_terms"), bp.get("accepted_terms")) and last.get("seq") == len(es), repr(last))
+    check("APP-9", "the unmoved booking gains nothing", same_json((get_res(hana, "VQ0001").json, entries(hana, "VQ0001")), before["VQ0001"]), "")
+    d = decision(hana, "VP0001")
+    check("APP-10", "decision shows the new revision with the same terms", d.status == 200 and d.json.get("revision") == vp.get("revision") and same_json(d.json.get("accepted_terms"), bp.get("accepted_terms")), repr(d))
+    expect_err("APP-11", "a second application under a different key is 409 plan_already_applied", apply_plan(mgr, "r_plan", pid), 409, "plan_already_applied")
+    rv = rrev("r_plan")
+    expect_err("APP-12", "another preview taken before the application is now stale (409 stale_plan)", apply_plan(mgr, "r_plan", other["plan_id"]), 409, "stale_plan")
+    cancel(hana, "VP0001")
+    rep = apply_plan(mgr, "r_plan", pid, key=k)
+    check("APP-13", "replay of the successful key is 200 with the original response even after a later cancel", rep.status == 200 and same_json(rep.json, A.json), repr(rep)[:200])
+    check("APP-14", "the refused and replayed applications changed no revision", rrev("r_plan") == rv + 1, "%r vs %r" % (rrev("r_plan"), rv + 1))
+    r = replan(mgr, "r_plan", "v3", inst(THU, "21:00"), inst(THU, "23:00"))
+    a2 = apply_plan(mgr, "r_plan", r.json["plan_id"], body={"note": "ignored"}) if r.status == 201 else r
+    check("APP-15", "an apply body with unknown fields is accepted (201)", a2.status == 201, repr(a2)[:200])
+
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    S = must_adopt(hana, "VS0001", 3, 1)
+    sid, refs = S["series_id"], occ_refs(S)
+    patch(hana, refs[2], {"party_size": 3})
+    g0 = get_series(hana, sid).json
+    o1 = get_res(hana, refs[1]).json
+    o2 = get_res(hana, refs[2]).json
+    p = must_plan(mgr, "r_plan", "v3", inst(DAY(7), "18:00"), inst(DAY(14), "23:00"))
+    check("APP-16", "a plan spanning two occurrences considers both", sorted(x.get("reference") for x in p["assignments"]) == sorted([refs[1], refs[2]]), repr(p)[:300])
+    a = apply_plan(mgr, "r_plan", p["plan_id"])
+    g = get_series(hana, sid).json
+    n1, n2 = get_res(hana, refs[1]).json, get_res(hana, refs[2]).json
+    check("APP-17", "the series revision increases exactly once for the plan and exception flags are unchanged",
+          a.status == 201 and g.get("revision") == g0.get("revision") + 1 and [o.get("exception") for o in g.get("occurrences", [])] == [o.get("exception") for o in g0.get("occurrences", [])], "%r -> %r" % (g0.get("revision"), g.get("revision")))
+    check("APP-18", "moved occurrences keep dates, references, times and accepted terms",
+          all(n.get(f) == o.get(f) for n, o in ((n1, o1), (n2, o2)) for f in ("reference", "starts_at_local", "starts_at", "ends_at", "party_size"))
+          and same_json(n1.get("accepted_terms"), o1.get("accepted_terms")) and n1.get("table_ids") != ["v3"] and n2.get("table_ids") != ["v3"], "")
+
+    for label, change in [("a new booking", lambda m, h: must_book(h, "r_plan", "v2", T(THU, "21:30"), 2)),
+                          ("a real amendment", lambda m, h: patch(h, "VQ0001", {"party_size": 3})),
+                          ("a cancellation", lambda m, h: cancel(h, "VQ0001")),
+                          ("a policy publication", lambda m, h: must_publish(m, policy(DAY(60), caps={"v1": 4, "v2": 4, "v3": 6}), rid="r_plan")),
+                          ("a series adoption", lambda m, h: must_adopt(h, "VS0001", 2, 1)),
+                          ("a successful batch", lambda m, h: moves(h, [{"reference": "VQ0001", "party_size": 3}])),
+                          ("another plan's application", lambda m, h: must_apply(m, "r_plan", must_plan(m, "r_plan", "v2", inst(DAY(3), "18:00"), inst(DAY(3), "23:00"))["plan_id"]))]:
+        reset(apply_fixture())
+        mgr, hana = login3("mgr"), login("hana")
+        p = must_plan(mgr, "r_plan", "v1", frm, to)
+        change(mgr, hana)
+        snap = (get_res(hana, "VP0001").json, entries(hana, "VP0001"), rrev("r_plan"))
+        r = apply_plan(mgr, "r_plan", p["plan_id"])
+        check("APP-19[%s]" % label, "after %s at the same restaurant the plan is 409 stale_plan and nothing changes" % label,
+              r.status == 409 and r.code == "stale_plan" and same_json((get_res(hana, "VP0001").json, entries(hana, "VP0001"), rrev("r_plan")), snap), repr(r)[:200])
+    reset(apply_fixture())
+    mgr, hana, mgr2 = login3("mgr"), login("hana"), login3("mgr2")
+    S = must_adopt(hana, "VS0001", 2, 1)
+    p = must_plan(mgr, "r_plan", "v1", frm, to)
+    r = amend(hana, S["series_id"], 1, 1, "21:00")
+    rr = apply_plan(mgr, "r_plan", p["plan_id"])
+    check("APP-19[a series amendment]", "after a series amendment at the same restaurant the plan is 409 stale_plan",
+          r.status == 201 and rr.status == 409 and rr.code == "stale_plan", "amend=%r apply=%r" % (r, rr))
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    p = must_plan(mgr, "r_plan", "v1", frm, to)
+    must_book(hana, "r_plan2", "w1", T(THU, "19:00"), 2)
+    r = apply_plan(mgr, "r_plan", p["plan_id"])
+    check("APP-20", "a booking at another restaurant does not invalidate the plan (201)", r.status == 201, repr(r)[:200])
+
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    p = must_plan(mgr, "r_plan", "v1", frm, to)
+    res = parallel([lambda: apply_plan(mgr, "r_plan", p["plan_id"]) for _ in range(10)])
+    oks = [x for x in res if not isinstance(x, Exception)]
+    es = entries(hana, "VP0001") or []
+    check("APP-21", "10 concurrent applications of one plan: exactly one 201, the rest 409, the booking moved once",
+          len(oks) == 10 and sum(1 for x in oks if x.status == 201) == 1 and all(x.status == 201 or (x.status == 409 and x.code in ("plan_already_applied", "stale_plan")) for x in oks)
+          and get_res(hana, "VP0001").json.get("revision") == 2 and sum(1 for e in es if e.get("event") == "reassigned") == 1, repr([(x.status, x.code) for x in oks]))
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    pa = must_plan(mgr, "r_plan", "v1", frm, to)
+    pb = must_plan(mgr, "r_plan", "v3", inst(THU, "21:00"), inst(THU, "23:00"))
+    res = parallel([lambda: apply_plan(mgr, "r_plan", pa["plan_id"]), lambda: apply_plan(mgr, "r_plan", pb["plan_id"])])
+    oks = [x for x in res if not isinstance(x, Exception)]
+    check("APP-22", "concurrent applications of two plans for one restaurant: one 201 and one 409 stale_plan",
+          sorted((x.status, x.code) for x in oks) == [(201, None), (409, "stale_plan")], repr([(x.status, x.code) for x in oks]))
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    p1 = must_plan(mgr, "r_plan", "v1", frm, to)
+    p2 = must_plan(mgr, "r_plan2", "w1", inst(THU, "18:00"), inst(THU, "23:00"))
+    a2 = apply_plan(mgr, "r_plan2", p2["plan_id"])
+    a1 = apply_plan(mgr, "r_plan", p1["plan_id"])
+    check("APP-23", "a closure applied at another restaurant does not invalidate this plan (both 201)", a2.status == 201 and a1.status == 201, "%r %r" % (a2, a1))
+
+
+@group("CLS")
+def g_closure_effects():
+    reset(s4_fixture())
+    mgr, hana, ravi = login3("mgr"), login("hana"), login("ravi")
+    B = must_book(hana, "r_combo", "c_b", T(THU, "19:00"), 2)
+    W = must_book(hana, "r_combo", "c_d", T(THU, "21:00"), 2)
+    p = must_plan(mgr, "r_combo", "c_b", inst(THU, "19:00"), inst(THU, "20:00"))
+    am = {a.get("reference"): (sorted(a.get("table_ids") or []), a.get("changed")) for a in p.get("assignments", [])}
+    check("CLS-0", "the booking on c_b moves to c_a (the tight single, rank 0)", am == {B["reference"]: (["c_a"], True)}, repr(p)[:200])
+    must_apply(mgr, "r_combo", p["plan_id"])
+    a = avail("r_combo", THU, 1, explain="true")
+    sm = {s["starts_at_local"][11:]: s for s in a.json.get("slots", [])}
+    during, after = ("18:00", "18:30", "19:00", "19:30"), ("20:00", "20:30", "21:00")
+    ok = all("c_b" not in sm[h]["available_table_ids"] and all("c_b" not in o["table_ids"] for o in sm[h].get("available_options", [])) for h in during)
+    check("CLS-1", "the closed table and every pair containing it are absent from availability for slots overlapping the closure", ok, repr({h: sm[h]["available_table_ids"] for h in during}))
+    check("CLS-2", "the closed table is offered again for slots after the closure (old booking moved away)", all("c_b" in sm[h]["available_table_ids"] for h in after), repr({h: sm[h]["available_table_ids"] for h in after}))
+    ex = {e["table_id"]: e for e in sm["19:00"].get("explain", [])}
+    check("CLS-3", "explain reports no_overlap false (capacity true) for the closed table during the closure and true afterwards",
+          [r.get("holds") for r in ex.get("c_b", {}).get("rules", [])] == [True, False]
+          and [r.get("holds") for r in {e["table_id"]: e for e in sm["20:00"].get("explain", [])}.get("c_b", {}).get("rules", [])] == [True, True], repr(ex.get("c_b")))
+    check("CLS-4", "the moved booking now occupies c_a (c_a absent 18:00-20:00, offered from 20:30)",
+          all("c_a" not in sm[h]["available_table_ids"] for h in ("18:00", "19:00", "20:00")) and "c_a" in sm["20:30"]["available_table_ids"], "")
+    expect_err("CLS-5a", "a booking on the closed table during the closure is 409 table_unavailable", book(ravi, "r_combo", "c_b", T(THU, "19:00"), 2), 409, "table_unavailable")
+    expect_err("CLS-5b", "a booking overlapping the closure's start (18:30) is 409", book(ravi, "r_combo", "c_b", T(THU, "18:30"), 2), 409, "table_unavailable")
+    expect_err("CLS-5c", "a pair containing the closed table is 409", book2(ravi, "r_combo", ["c_b", "c_c"], T(THU, "19:30"), 2), 409, "table_unavailable")
+    check_res("CLS-5d", "a booking on the closed table starting when the closure ends (20:00) is 201", book(ravi, "r_combo", "c_b", T(THU, "20:00"), 2), 201)
+    expect_err("CLS-6", "an amendment onto the closed table during the closure is 409", patch(hana, W["reference"], {"table_id": "c_b", "starts_at_local": T(THU, "18:00")}), 409, "table_unavailable")
+    expect_err("CLS-7", "a batch move onto the closed table during the closure is 409", moves(hana, [{"reference": W["reference"], "table_id": "c_b", "starts_at_local": T(THU, "18:00")}]), 409, "table_unavailable")
+    must_apply(mgr, "r_combo", must_plan(mgr, "r_combo", "c_c", inst(DAY(7), "18:00"), inst(DAY(7), "23:00"))["plan_id"])
+    X = must_book(hana, "r_combo", "c_c", T(THU, "21:30"), 2)
+    expect_err("CLS-8", "an adoption whose occurrence lands on a closed table is 409 table_unavailable", adopt(hana, X["reference"], 2, 1), 409, "table_unavailable")
+    must_apply(mgr, "r_combo", must_plan(mgr, "r_combo", "c_d", inst(PAST, "18:00"), inst(PAST, "23:00"))["plan_id"])
+    expect_err("CLS-9a", "a closure in the past behaves the same (booking on it 409)", book(ravi, "r_combo", "c_d", T(PAST, "19:00"), 2), 409, "table_unavailable")
+    check_res("CLS-9b", "other tables on that past date stay bookable", book(ravi, "r_combo", "c_c", T(PAST, "19:00"), 2), 201)
+    reset(s4_fixture())
+    check_res("CLS-10", "reset clears closures (c_b at 19:00 bookable again)", book(login("ravi"), "r_combo", "c_b", T(THU, "19:00"), 2), 201)
+
+
+@group("SAM")
+def g_series_amend():
+    def fresh(count=4):
+        reset(s4_fixture())
+        tok = login("hana")
+        A = must_book(tok, "r_pol", "p_c", T(THU, "19:00"), 4)
+        S = must_adopt(tok, A["reference"], count, 1)
+        return tok, S["series_id"], occ_refs(S)
+    tok, sid, refs = fresh()
+    ravi = login("ravi")
+    expect_err("SAM-1", "amend without a token is 401", call("POST", "/series/%s/amend" % sid, body={"expected_revision": 1, "from_index": 0, "local_time": "19:30"}, key=newkey()), 401, "unauthenticated")
+    expect_err("SAM-2a", "an unknown series is 404", amend(tok, "no-such-series", 1, 0, "19:30"), 404, "not_found")
+    expect_err("SAM-2b", "another owner's series is 404", amend(ravi, sid, 1, 0, "19:30"), 404, "not_found")
+    expect_err("SAM-3", "missing Idempotency-Key is 400", call("POST", "/series/%s/amend" % sid, body={"expected_revision": 1, "from_index": 0, "local_time": "19:30"}, token=tok), 400, "missing_idempotency_key")
+    base = {"expected_revision": 1, "from_index": 0, "local_time": "19:30"}
+    for label, over in [("expected_revision 0", {"expected_revision": 0}), ("expected_revision -1", {"expected_revision": -1}),
+                        ("expected_revision true", {"expected_revision": True}), ("expected_revision string", {"expected_revision": "1"}),
+                        ("expected_revision 1.5", {"expected_revision": 1.5}), ("from_index -1", {"from_index": -1}),
+                        ("from_index = count", {"from_index": 4}), ("from_index true", {"from_index": True}), ("from_index string", {"from_index": "1"}),
+                        ("from_index 1.5", {"from_index": 1.5}), ("local_time 24:00", {"local_time": "24:00"}), ("local_time 7:00", {"local_time": "7:00"}),
+                        ("local_time 07:00:00", {"local_time": "07:00:00"}), ("local_time 07:0", {"local_time": "07:0"}), ("local_time 19:60", {"local_time": "19:60"}),
+                        ("local_time empty", {"local_time": ""}), ("local_time with date", {"local_time": T(THU, "19:30")})]:
+        expect_err("SAM-4[%s]" % label, "%s is 422 validation_failed" % label, amend(tok, sid, 0, 0, "", body=dict(base, **over)), 422, "validation_failed")
+    for f in ("expected_revision", "from_index", "local_time"):
+        b = dict(base)
+        del b[f]
+        expect_err("SAM-4[missing %s]" % f, "missing %s is 422 validation_failed" % f, amend(tok, sid, 0, 0, "", body=b), 422, "validation_failed")
+    r = amend(tok, sid, 0, 0, "", body=dict(base, local_time=True))
+    check("SAM-4b", "local_time of a non-string type is refused (400 malformed_request or 422 validation_failed)", any_status(r, ((400, "malformed_request"), (422, "validation_failed"))), repr(r))
+    for t in ("00:00", "23:59"):
+        r = amend(tok, sid, 1, 0, t)
+        check("SAM-5[%s]" % t, "local_time %s is shape-valid (refused by the schedule, not by validation_failed)" % t,
+              r.status == 422 and r.code in ("outside_opening_hours", "not_on_slot_grid"), repr(r))
+    expect_err("SAM-6", "a stale expected_revision is 409 stale_revision before booking validation (off-grid time)", amend(tok, sid, 5, 0, "19:10"), 409, "stale_revision")
+    g0 = get_series(tok, sid).json
+    snap = ([get_res(tok, x).json for x in refs], [entries(tok, x) for x in refs], rrev("r_pol"))
+    check("SAM-6b", "refused amendments changed nothing", g0.get("revision") == 1 and same_json(([get_res(tok, x).json for x in refs], [entries(tok, x) for x in refs], rrev("r_pol")), snap), "")
+    k = newkey()
+    rv = rrev("r_pol")
+    r = amend(tok, sid, 1, 1, "19:30", key=k, extra={"note": "ignored"})
+    first = r
+    g = r.json if r.status == 201 and isinstance(r.json, dict) else {}
+    occ = g.get("occurrences") or []
+    st = [(o.get("reservation") or {}).get("starts_at_local") for o in occ]
+    check("SAM-7", "201 with the current series; occurrences 1-3 move to 19:30 on their own dates although each new slot overlaps the old (unknown field ignored)",
+          r.status == 201 and st == [T(THU, "19:00"), T(DAY(7), "19:30"), T(DAY(14), "19:30"), T(DAY(21), "19:30")] and g.get("revision") == 2, repr(r)[:300])
+    ok = True
+    for i in (1, 2, 3):
+        es = entries(tok, refs[i]) or []
+        ok = ok and len(es) == 2 and es[1].get("event") == "changed" and es[1].get("changes") == [{"field": "starts_at_local", "from": T(DAY(7 * i), "19:00"), "to": T(DAY(7 * i), "19:30")}] and es[1].get("revision") == 2
+    check("SAM-8", "each changed occurrence gains one changed entry (starts_at_local) and one revision; occurrence 0 unchanged",
+          ok and same_json(get_res(tok, refs[0]).json, snap[0][0]), "")
+    check("SAM-9", "series and restaurant revisions increase once each; no exception is marked", rrev("r_pol") == rv + 1 and all(o.get("exception") is False for o in occ), "rrev %r -> %r" % (rv, rrev("r_pol")))
+    check("SAM-9b", "tables, party and references are kept", all((o.get("reservation") or {}).get("table_ids") == ["p_c"] and (o.get("reservation") or {}).get("party_size") == 4 for o in occ) and occ_refs(g) == refs, "")
+    rep = amend(tok, sid, 1, 1, "19:30", key=k, extra={"note": "ignored"})
+    check("SAM-10", "replay is 200 with the identical response", rep.status == 200 and same_json(rep.json, r.json), repr(rep)[:200])
+    expect_err("SAM-11", "same key with a different body is 409 idempotency_key_reuse", amend(tok, sid, 1, 1, "20:00", key=k), 409, "idempotency_key_reuse")
+    rv, before = rrev("r_pol"), ([get_res(tok, x).json for x in refs], [entries(tok, x) for x in refs])
+    r = amend(tok, sid, 2, 2, "19:30")
+    check("SAM-12", "an amendment whose eligible occurrences already have that time is a 201 no-op: no revision, history or counter changes",
+          r.status == 201 and r.json.get("revision") == 2 and rrev("r_pol") == rv and same_json(([get_res(tok, x).json for x in refs], [entries(tok, x) for x in refs]), before), repr(r)[:200])
+    patch(tok, refs[1], {"party_size": 3})
+    cancel(tok, refs[3])
+    srev = get_series(tok, sid).json.get("revision")
+    r = amend(tok, sid, srev, 0, "20:00")
+    st = [(o.get("reservation") or {}).get("starts_at_local") for o in (r.json or {}).get("occurrences", [])]
+    check("SAM-13", "exception and cancelled occurrences are not eligible: only occurrences 0 and 2 move to 20:00",
+          r.status == 201 and st == [T(THU, "20:00"), T(DAY(7), "19:30"), T(DAY(14), "20:00"), T(DAY(21), "19:30")]
+          and get_res(tok, refs[3]).json.get("status") == "cancelled" and get_res(tok, refs[1]).json.get("party_size") == 3, repr(st))
+    srev = get_series(tok, sid).json.get("revision")
+    rv = rrev("r_pol")
+    r = amend(tok, sid, srev, 3, "21:00")
+    check("SAM-14", "an empty eligible set (from_index at a cancelled occurrence) is a 201 that changes nothing", r.status == 201 and r.json.get("revision") == srev and rrev("r_pol") == rv, repr(r)[:200])
+    rep = amend(tok, sid, 1, 1, "19:30", key=k, extra={"note": "ignored"})
+    check("SAM-15", "the earlier replay still returns the original response after further edits and cancellations", rep.status == 200 and same_json(rep.json, first.json), repr(rep)[:200])
+
+    reset(s4_fixture())
+    tok, mgr = login("hana"), login3("mgr")
+    A = must_book(tok, "r_pol", "p_c", T(THU, "19:00"), 4)
+    S = must_adopt(tok, A["reference"], 4, 1)
+    P = must_publish(mgr, policy(DAY(14), dur=60))
+    r = amend(tok, S["series_id"], 1, 0, "19:30")
+    occ = (r.json or {}).get("occurrences", []) if r.status == 201 else []
+    vers = [((o.get("reservation") or {}).get("accepted_terms") or {}).get("policy_version") for o in occ]
+    ends = [(o.get("reservation") or {}).get("ends_at", "")[11:16] for o in occ]
+    check("SAM-16", "each real change adopts its resulting date's policy: versions [0, 0, 1, 1], ends 21:00, 21:00, 20:30, 20:30",
+          vers == [0, 0, 1, 1] and ends == ["21:00", "21:00", "20:30", "20:30"], "vers=%r ends=%r" % (vers, ends))
+    check("SAM-16b", "occurrences under version 1 carry its terms", len(occ) == 4 and terms_eq(occ[2]["reservation"].get("accepted_terms"), terms_of(P, 1)), "")
+    expect_err("SAM-17a", "an off-grid time is 422 not_on_slot_grid", amend(tok, S["series_id"], 2, 0, "19:10"), 422, "not_on_slot_grid")
+    expect_err("SAM-17b", "a time whose end passes closing is 422 outside_opening_hours", amend(tok, S["series_id"], 2, 0, "22:00"), 422, "outside_opening_hours")
+
+    Y = TODAY.year + 1
+    sf = last_sunday(Y, 3)
+    week = dt.timedelta(days=7)
+    reset(s4_fixture())
+    tok, ravi = login("hana"), login("ravi")
+    N = must_book(tok, "r_nacht", "n_1", T(sf - 2 * week, "01:30"), 2)
+    S = must_adopt(tok, N["reference"], 3, 1)
+    must_book(ravi, "r_nacht", "n_1", T(sf - 2 * week, "03:00"), 2)
+    snap = ([get_res(tok, x).json for x in occ_refs(S)], get_series(tok, S["series_id"]).json)
+    expect_err("SAM-18", "a nonexistent local time at index 2 takes precedence over an occupancy conflict at index 0 (422 invalid_local_time)",
+               amend(tok, S["series_id"], 1, 0, "02:30"), 422, "invalid_local_time")
+    check("SAM-18b", "nothing changed", same_json(([get_res(tok, x).json for x in occ_refs(S)], get_series(tok, S["series_id"]).json), snap), "")
+    expect_err("SAM-18c", "without the gap the occupancy conflict at index 0 is 409 table_unavailable", amend(tok, S["series_id"], 1, 0, "03:00"), 409, "table_unavailable")
+
+    reset(s4_fixture())
+    tok, ravi = login("hana"), login("ravi")
+    A = must_book(tok, "r_pol", "p_c", T(THU, "19:00"), 4)
+    S = must_adopt(tok, A["reference"], 3, 1)
+    sid, refs = S["series_id"], occ_refs(S)
+    O = must_book(ravi, "r_pol", "p_c", T(THU, "21:00"), 2)
+    expect_err("SAM-19a", "a conflict with another diner's booking is 409 table_unavailable", amend(tok, sid, 1, 0, "20:00"), 409, "table_unavailable")
+    cancel(ravi, O["reference"])
+    patch(tok, refs[2], {"starts_at_local": T(DAY(7), "20:30")})
+    expect_err("SAM-19b", "a conflict with an unchanged (exception) occurrence is 409 table_unavailable", amend(tok, sid, 2, 0, "20:00"), 409, "table_unavailable")
+    reset(s4_fixture())
+    tok, mgr = login("hana"), login3("mgr")
+    A = must_book(tok, "r_pol", "p_c", T(THU, "19:00"), 4)
+    S = must_adopt(tok, A["reference"], 3, 1)
+    sid, refs = S["series_id"], occ_refs(S)
+    must_apply(mgr, "r_pol", must_plan(mgr, "r_pol", "p_c", inst(DAY(7), "21:00"), inst(DAY(7), "23:00"))["plan_id"])
+    expect_err("SAM-19c", "a conflict with an applied closure is 409 table_unavailable", amend(tok, sid, 1, 0, "20:00"), 409, "table_unavailable")
+    p = must_plan(mgr, "r_pol", "p_c", inst(DAY(14), "18:00"), inst(DAY(14), "23:00"))
+    must_apply(mgr, "r_pol", p["plan_id"])
+    g = get_series(tok, sid).json
+    moved = get_res(tok, refs[2]).json
+    check("SAM-20", "a seating repair moves occurrence 2 to p_b without marking an exception (series revision 2)",
+          moved.get("table_ids") == ["p_b"] and g.get("revision") == 2 and all(o.get("exception") is False for o in g.get("occurrences", [])), repr(moved.get("table_ids")))
+    r = amend(tok, sid, 2, 0, "19:30")
+    tabs = [(o.get("reservation") or {}).get("table_ids") for o in (r.json or {}).get("occurrences", [])]
+    check("SAM-21", "the repaired occurrence stays eligible and keeps its new table when the series is amended",
+          r.status == 201 and tabs == [["p_c"], ["p_c"], ["p_b"]] and get_res(tok, refs[2]).json.get("starts_at_local") == T(DAY(14), "19:30"), repr(r)[:300])
+
+    reset(s4_fixture())
+    tok = login("hana")
+    A = must_book(tok, "r_pol", "p_c", T(THU, "19:00"), 4)
+    S = must_adopt(tok, A["reference"], 3, 1)
+    times = ["18:00", "18:30", "19:30", "20:00", "20:30", "21:00", "21:30", "18:00"]
+    res = parallel([lambda t=t: amend(tok, S["series_id"], 1, 0, t) for t in times])
+    oks = [x for x in res if not isinstance(x, Exception)]
+    g = get_series(tok, S["series_id"]).json
+    check("SAM-22", "8 concurrent amendments from the same expected revision: exactly one 201, the rest 409 stale_revision, series revision 2",
+          len(oks) == 8 and sum(1 for x in oks if x.status == 201) == 1 and sum(1 for x in oks if x.status == 409 and x.code == "stale_revision") == 7 and g.get("revision") == 2,
+          repr([(x.status, x.code) for x in oks]))
+
+    reset(s4_fixture())
+    tok, mgr = login("hana"), login3("mgr")
+    Z = must_book(tok, "r_zulu", "z_1", zulu_local(70), 2)
+    S = must_adopt(tok, Z["reference"], 2, 1)
+    must_publish(mgr, zulu_policy(cut=600), rid="r_zulu")
+    t1 = zulu_local(75)[11:]
+    r = amend(tok, S["series_id"], 1, 0, t1)
+    check("SAM-23a", "a change outside the old accepted cutoff (60) succeeds and adopts the new 600-minute cutoff",
+          r.status == 201 and ((r.json["occurrences"][0].get("reservation") or {}).get("accepted_terms") or {}).get("cancellation_cutoff_minutes") == 600, repr(r)[:300])
+    t2 = zulu_local(80)[11:]
+    expect_err("SAM-23b", "the next change finds occurrence 0 within its accepted cutoff: 409 cutoff_passed", amend(tok, S["series_id"], 2, 0, t2), 409, "cutoff_passed")
+    expect_err("SAM-23c", "the cutoff of occurrence 0 precedes its own validation error (off-grid time)", amend(tok, S["series_id"], 2, 0, t2[:4] + "2"), 409, "cutoff_passed")
+
+
+@group("UPG4")
+def g_upgrade4():
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def load(n):
+        with open(os.path.join(here, "fixtures", n), encoding="utf-8") as f:
+            return json.load(f)
+    ex3, e3 = load("stage3_export.json"), load("stage3_export_expected.json")
+    reset(s4_fixture())
+    r = call("POST", "/_test/import", body=ex3, timeout=10)
+    expect_status("UPG4-1", "import of the genuine stage-3 export is 204", r, 204)
+    tok, mgr = e3["token_hana"], e3["token_mgr"]
+    lst = call("GET", "/reservations", token=tok)
+    check("UPG4-2", "the stage-3 session tokens still work", lst.status == 200 and call("GET", "/restaurants/r_up3/policies").status == 200, repr(lst)[:200])
+    if lst.status != 200:
+        return
+    check("UPG4-3", "the restaurant revision is the exported value", rrev("r_up3") == e3["restaurant_revision"], "%r vs %r" % (rrev("r_up3"), e3["restaurant_revision"]))
+    got = lst.json.get("reservations", [])
+    check("UPG4-4", "reservations are unchanged (identities, references, revisions, terms, statuses, timestamps)",
+          len(got) == len(e3["list"]) and all(s1_equiv(o, g) for o, g in zip(e3["list"], got)), "")
+    check("UPG4-5", "every history is intact", all(same_json(hist(tok, ref).json, h) for ref, h in e3["histories"].items()), "")
+    sid = e3["series_create"]["series_id"]
+    check("UPG4-6", "the series (with its exception and cancelled occurrences) and the policies are intact",
+          same_json(get_series(tok, sid).json, e3["series_now"]) and same_json(get_policies("r_up3").json, e3["policies"]), "")
+    for cid, path, key, body, orig, t in (("UPG4-7a", "/reservations", "kA", "bA", "A_create", tok), ("UPG4-7b", "/series", "kS", "sb", "series_create", tok),
+                                          ("UPG4-7c", "/reservation-moves", "kM", "mb", "batch", tok), ("UPG4-7d", "/reservations", "kL", "bL", "lost", tok),
+                                          ("UPG4-7e", "/restaurants/r_up3/policies", "kpol", "pol", "policy", mgr)):
+        rep = call("POST", path, body=e3[body], token=t, key=e3[key])
+        check(cid, "a stage-3 receipt on %s replays with exactly its original body" % path, rep.status == 200 and same_json(rep.json, e3[orig]), "orig=%r got=%r" % (e3[orig], rep))
+    r = call("POST", "/reservations", body=dict(e3["bF"], party_size=2), token=tok, key=e3["kF"])
+    check("UPG4-8", "a stage-3 key that failed is a first use after import (201)", r.status == 201, repr(r))
+    occ = e3["occ"]
+    srev = e3["series_now"]["revision"]
+    r = amend(tok, sid, srev, 0, "19:00")
+    st = [(o.get("reservation") or {}).get("starts_at_local") for o in (r.json or {}).get("occurrences", [])]
+    thu = e3["thu"]
+    d = lambda n: (dt.date.fromisoformat(thu) + dt.timedelta(days=n)).isoformat()  # noqa: E731
+    check("UPG4-9", "a series amendment works on the imported series; the moved (exception) and cancelled occurrences are excluded",
+          r.status == 201 and st == [thu + "T19:00", d(7) + "T18:30", d(14) + "T18:00", d(21) + "T19:00"] and r.json.get("revision") == srev + 1, repr(st))
+    p = replan(mgr, "r_up3", "u_c", d(21) + "T18:00:00+02:00", d(21) + "T23:00:00+02:00")
+    a = apply_plan(mgr, "r_up3", p.json["plan_id"]) if p.status == 201 else p
+    g = get_series(tok, sid).json
+    check("UPG4-10", "a replan on the imported restaurant moves the imported occurrence 3 (u_c to u_b) and increments the series revision once, flags unchanged",
+          a.status == 201 and get_res(tok, occ[3]).json.get("table_ids") == ["u_b"] and g.get("revision") == srev + 2
+          and [o.get("exception") for o in g.get("occurrences", [])] == [o.get("exception") for o in e3["series_now"]["occurrences"]], "plan=%r apply=%r" % (p, a))
+    check("UPG4-11", "untouched imported histories stay intact after these operations", same_json(hist(tok, e3["A_create"]["reference"]).json, e3["histories"][e3["A_create"]["reference"]]), "")
+    for tag, exn, ref, newt in (("s1", "stage1", "UPSEED", "21:00"), ("s2", "stage2", "S2SEED", "19:00")):
+        ex, e = load("%s_export.json" % exn), load("%s_export_expected.json" % exn)
+        reset(s4_fixture())
+        call("POST", "/_test/import", body=ex, timeout=10)
+        tk = e["token_hana"]
+        check("UPG4-12[%s]" % tag, "after a stage-%s import the restaurant revision is 0" % tag[1], rrev("r_combo") == 0, repr(rrev("r_combo")))
+        s = adopt(tk, ref, 2, 1)
+        r = amend(tk, s.json["series_id"], 1, 0, newt) if s.status == 201 else s
+        check("UPG4-13[%s]" % tag, "an imported stage-%s booking can be adopted and the series amended" % tag[1],
+              s.status == 201 and r.status == 201 and ((r.json.get("occurrences") or [{}])[0].get("reservation") or {}).get("starts_at_local", "")[11:] == newt, "adopt=%r amend=%r" % (s, r))
+        expect_err("UPG4-14[%s]" % tag, "an imported stage-%s restaurant has no managers: a replan is 403" % tag[1],
+                   replan(tk, "r_combo", "c_a", e["thu"] + "T18:00:00+02:00", e["thu"] + "T23:00:00+02:00"), 403, "forbidden")
+
+
+@group("RT4")
+def g_roundtrip4():
+    reset(apply_fixture())
+    mgr, hana = login3("mgr"), login("hana")
+    kP = newkey()
+    p1 = must_plan(mgr, "r_plan", "v1", inst(THU, "18:00"), inst(THU, "21:00"))
+    A1 = apply_plan(mgr, "r_plan", p1["plan_id"], key=kP)
+    S = must_adopt(hana, "VS0001", 3, 1)
+    kA = newkey()
+    Am = amend(hana, S["series_id"], 1, 1, "21:00", key=kA)
+    p2 = must_plan(mgr, "r_plan", "v2", inst(DAY(1), "18:00"), inst(DAY(1), "23:00"))
+    refs = [x["reference"] for x in list_res(hana)]
+
+    def snap():
+        return (list_res(hana), {r: entries(hana, r) for r in refs}, get_series(hana, S["series_id"]).json, rrev("r_plan"), avail("r_plan", THU, 1, explain="true").json)
+    pre = snap()
+    ex = call("GET", "/_test/export", timeout=10)
+    must_book(hana, "r_plan", "v2", T(DAY(2), "19:00"), 2)
+    imp = call("POST", "/_test/import", body=ex.json, timeout=10)
+    check("RT4-1", "a stage-4 export with an applied closure, a pending plan and a series amendment imports with 204", A1.status == 201 and Am.status == 201 and imp.status == 204, "%r %r %r" % (A1, Am, imp))
+    post = snap()
+    for i, nm in enumerate(["reservations", "histories", "series", "restaurant revision", "availability with the closure"]):
+        check("RT4-2[%s]" % nm, "%s are identical after the round trip" % nm, same_json(post[i], pre[i]), "")
+    rep = apply_plan(mgr, "r_plan", p1["plan_id"], key=kP)
+    check("RT4-3", "the applied plan's receipt replays with the original response", rep.status == 200 and same_json(rep.json, A1.json), repr(rep)[:200])
+    rep = amend(hana, S["series_id"], 1, 1, "21:00", key=kA)
+    check("RT4-4", "the series amendment receipt replays with the original response", rep.status == 200 and same_json(rep.json, Am.json), repr(rep)[:200])
+    expect_err("RT4-5", "the applied plan is still marked applied (409 plan_already_applied)", apply_plan(mgr, "r_plan", p1["plan_id"]), 409, "plan_already_applied")
+    r = apply_plan(mgr, "r_plan", p2["plan_id"])
+    check("RT4-6", "the pending plan survived the round trip and still applies (no revision changed)", r.status == 201, repr(r)[:200])
+    expect_err("RT4-7", "the imported closure still rejects bookings on its table", book(hana, "r_plan", "v1", T(THU, "19:00"), 2), 409, "table_unavailable")
+
+
+@group("CON4")
+def g_concurrency4():
+    reset(apply_fixture())
+    mgr, hana, ravi = login3("mgr"), login("hana"), login("ravi")
+    S = must_adopt(hana, must_book(hana, "r_plan", "v2", T(DAY(5), "19:00"), 2)["reference"], 3, 1)  # untouched by the plans below
+    pa = must_plan(mgr, "r_plan", "v1", inst(THU, "18:00"), inst(THU, "21:00"))
+    pb = must_plan(mgr, "r_plan", "v3", inst(THU, "21:00"), inst(THU, "23:00"))
+    others = [must_book(ravi, "r_plan2", t, T(DAY(1), "19:00"), 2) for t in ("w1", "w2")]
+    kinds, fns = [], []
+
+    def add(kind, fn):
+        kinds.append(kind)
+        fns.append(fn)
+    for i in range(6):
+        add("preview", lambda i=i: replan(mgr, "r_plan", "v2", inst(DAY(20 + i), "18:00"), inst(DAY(20 + i), "23:00")))
+    for p in (pa, pb):
+        for _ in range(4):
+            add("apply", lambda p=p: apply_plan(mgr, "r_plan", p["plan_id"]))
+    for t in ("18:30", "20:00", "20:30", "21:00"):
+        add("amend", lambda t=t: amend(hana, S["series_id"], 1, 1, t))
+    for i in range(4):
+        add("policy", lambda i=i: publish(mgr, policy("2032-03-%02d" % (i + 1), caps={"v1": 4, "v2": 4, "v3": 6}), rid="r_plan"))
+    tabs = ["v1", "v2", "v3"]
+    for i in range(12):
+        add("book-" + tabs[i % 3], lambda i=i: book([hana, ravi][i % 2], "r_plan", tabs[i % 3], T(DAY(10), "19:00"), 2))
+    for o in others:
+        add("other", lambda o=o: patch(ravi, o["reference"], {"party_size": 3}))
+    while len(fns) < 50:
+        add("read", lambda i=len(fns): call("GET", "/reservations", token=[hana, ravi][i % 2]))
+    res = parallel(fns)
+    exc = [x for x in res if isinstance(x, Exception)]
+    got = [(k, x) for k, x in zip(kinds, res) if not isinstance(x, Exception)]
+    check("CON4-1", "50 in-flight mixed previews, applications, series amendments, publications, bookings and amendments: no exception, no 5xx",
+          not exc and len(got) == 50 and all(x.status < 500 for _, x in got), "exc=%r statuses=%r" % (exc[:2], sorted({x.status for _, x in got})))
+    ap = [x for k, x in got if k == "apply"]
+    check("CON4-2", "at most one plan application succeeds; every other is 409 stale_plan or plan_already_applied",
+          sum(1 for x in ap if x.status == 201) <= 1 and all(x.status == 201 or (x.status == 409 and x.code in ("stale_plan", "plan_already_applied")) for x in ap), repr([(x.status, x.code) for x in ap]))
+    am = [x for k, x in got if k == "amend"]
+    check("CON4-3", "four concurrent series amendments from one revision: exactly one 201, three 409 stale_revision",
+          sum(1 for x in am if x.status == 201) == 1 and sum(1 for x in am if x.status == 409 and x.code == "stale_revision") == 3, repr([(x.status, x.code) for x in am]))
+    pv = sorted(x.json.get("policy_version") for k, x in got if k == "policy" and x.status == 201)
+    check("CON4-4", "concurrent publications get contiguous versions 1..4", pv == [1, 2, 3, 4], repr(pv))
+    for t in tabs:
+        xs = [x for k, x in got if k == "book-" + t]
+        check("CON4-5[%s]" % t, "racing bookings for %s: exactly one 201, the rest 409 table_unavailable" % t,
+              sum(1 for x in xs if x.status == 201) == 1 and all(x.status == 201 or (x.status == 409 and x.code == "table_unavailable") for x in xs), repr([x.status for x in xs]))
+    check("CON4-6", "amendments at another restaurant all succeed", all(x.status == 200 for k, x in got if k == "other"), "")
+    check("CON4-7", "previews all succeed", all(x.status == 201 for k, x in got if k == "preview"), repr([x.status for k, x in got if k == "preview"]))
+    reads = [x for k, x in got if k == "read"]
+    check("CON4-8", "every concurrent read is consistent (no table in two overlapping confirmed bookings)",
+          all(x.status == 200 and not overlap_violations(x.json.get("reservations", [])) for x in reads), "")
+    allres = list_res(hana) + list_res(ravi)
+    applied = [x for x in ap if x.status == 201]
+    bad = []
+    if applied:
+        plan = pa if applied[0].json.get("plan_id") == pa["plan_id"] else pb
+        c = plan["closure"]
+        for r_ in allres:
+            if r_.get("status") == "confirmed" and r_.get("restaurant_id") == "r_plan" and c["table_id"] in r_.get("table_ids", []) \
+                    and parse_ts(r_["starts_at"]) < parse_ts(c["to"]) and parse_ts(c["from"]) < parse_ts(r_["ends_at"]):
+                bad.append(r_["reference"])
+    check("CON4-9", "afterwards no confirmed booking sits on a closed table during its closure and no table is double-booked", not bad and not overlap_violations(allres), repr(bad))
+    badr = [(r_["reference"], r_.get("revision"), len(entries(t, r_["reference"]) or [])) for t in (hana, ravi) for r_ in list_res(t)
+            if r_.get("revision") != len(entries(t, r_["reference"]) or [])]
+    check("CON4-10", "every booking's revision equals its history length", not badr, repr(badr[:5]))
+
+
 @group("CONV")
 def g_conventions():
     check("CONV-1", "every JSON response carried Content-Type application/json", not CT_VIOLATIONS, repr(CT_VIOLATIONS[:5]))
@@ -3046,7 +3838,7 @@ def main():
     args = ap.parse_args()
     BASE = args.base_url.rstrip("/")
     only = {x.strip().upper() for x in args.only.split(",") if x.strip()}
-    print("# tablekeeper stage-3 HTTP probes against %s (THU=%s)" % (BASE, THU))
+    print("# tablekeeper stage-4 HTTP probes against %s (THU=%s)" % (BASE, THU))
     for name, fn in GROUPS:
         if only and name not in only and name != "CONV":
             continue

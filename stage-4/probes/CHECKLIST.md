@@ -1,6 +1,6 @@
-# Tablekeeper stage 3 - contract checklist (auditor)
+# Tablekeeper stage 4 - contract checklist (auditor)
 
-Part A keeps every stage-1 item and Part B every stage-2 item (both still in force). Part C adds the stage-3 items.
+Parts A, B and C keep every stage-1, stage-2 and stage-3 item (all still in force). Part D adds the stage-4 items.
 
 # Part A - stage 1
 
@@ -624,3 +624,187 @@ original responses. Throwaway probe credentials only.
 441. **N3-5** A huge positive `expected_revision` (for example 2^63): the documents give no upper range, so neither 409 nor 422 is asserted.
 442. **N3-6** Wrong JSON types inside a policy body: accepted as 400 or 422 (POL-10) because §5 and stage 3 give different rules.
 443. **N3-7** The order of entries in a policy's `opening_hours` echo and in `accepted_terms`: compared order-insensitively by weekday.
+
+# Part D - stage 4 additions
+
+Coordinator decisions applied (binding): the restaurant revision is read from
+`GET /restaurants/{id}.revision`, starts at 0 after reset and after a stage-1 or stage-2 import,
+keeps the exported value after a stage-3 or stage-4 import, and increments once per successful
+booking, real amendment, cancellation, policy publication, series adoption, batch, series amendment
+that changed something, and plan application; previews, no-ops, failures and replays never increment
+it. Considered bookings are every confirmed booking at the restaurant overlapping `[from, to)` on
+any table. Option ranks: singles in fixture order, then declared pairs in `combinable` order, from
+0; the rank vector is compared over considered bookings in ascending reference order.
+
+Changes to carried items: RREV-1 and RREV-19 now expect revision 0 after reset, and UPG3-7 expects
+0 after a stage-1 or stage-2 import. No other carried probe changed.
+
+Optimisation fixtures use restaurant `r_plan` (Europe/Berlin, slot 30, duration 90, every day
+18:00-23:00, manager `u_mgr`) with per-case tables, pairs and seeded bookings with chosen
+references, so the reference order is known. Unless stated, the closure is THU 18:00-23:00 and every
+booking starts at 19:00 (19:00-20:30).
+
+## RPV - replan preview
+
+444. **RPV-1** No token is 401 `unauthenticated`.
+445. **RPV-2** Unknown restaurant is 404 `not_found`.
+446. **RPV-3a/b** A diner and the manager of another restaurant are 403 `forbidden`.
+447. **RPV-4a/b/c** Missing key 400; empty key 400; 256-character key 422.
+448. **RPV-5** `from` or `to` without an offset, `from == to`, `from > to`, unparseable, date-only, local minute-only, and each of `table_id`, `from`, `to` missing are 422 `validation_failed`.
+449. **RPV-5b** `table_id` of a wrong JSON type is 400 `malformed_request` or 422 `validation_failed`.
+450. **RPV-6a/b** Unknown table and another restaurant's table are 404 `not_found`.
+451. **RPV-6c** A `Z`-suffixed instant is accepted as UTC or refused with 422 (both readings of "explicit offset" accepted).
+452. **RPV-7** Preview is 201 with string `plan_id`, integer `restaurant_revision`, the closure echoed (compared as instants), assignments in reference order each with `table_ids` and boolean `changed`, `moved_count` equal to the changed count, integer `unused_seats`.
+453. **RPV-8** `restaurant_revision` equals `GET /restaurants/{id}.revision` at that moment.
+454. **RPV-9** Considered bookings are exactly those overlapping the closure on any table: the booking on the closed table moves (v1 to v2), the overlapping booking on v3 stays; a later booking is not considered; moved 1, unused 4 (summed over considered bookings).
+455. **RPV-10** A preview changes nothing: availability with explain, bodies, histories, restaurant revision and series are identical.
+456. **RPV-11** Replay is 200 with an identical body.
+457. **RPV-12a/b** Same key with a different body, valid or invalid, is 409 `idempotency_key_reuse`.
+458. **RPV-13** The same closure written with UTC offsets gives the same assignments.
+459. **RPV-14** Unknown fields are ignored.
+460. **RPV-15** A key whose preview failed with 422 or 404 is a first use afterwards.
+461. **RPV-16** Two previews with different keys both succeed and the first remains applicable.
+462. **RPV-17** After that application the second preview is 409 `stale_plan`.
+
+## OPT - optimisation order (hand-computed)
+
+463. **OPT-A** Criterion 1 beats criterion 2. Tables a1 2 (closed), a2 8, a3 2, a5 1; AX0001 party 2 on a1, AY0001 party 1 on a3. Moving one (AX to a2: unused 6+1) beats moving two (AX to a3, AY to a5: unused 0). Expected AX [a2] changed, AY [a3] unchanged, moved 1, unused 7.
+464. **OPT-B** Criterion 2 beats rank. Tables b1 4 (closed), b2 8, b3 4; BX0001 party 4. Expected [b3] (rank 2, unused 0) over b2 (rank 1, unused 4); moved 1, unused 0.
+465. **OPT-C** Criterion 2 among pairs. Tables c1 6 (closed), c2 4, c3 2, c4 4; combinable [c2,c4], [c2,c3]; CX0001 party 6 (no single fits). Expected [c2,c3] (rank 5, unused 0) over [c2,c4] (rank 4, unused 2).
+466. **OPT-D** Criterion 3 and stay-put. Tables d1-d4 all 4 (d1 closed); DP0001 on d1 19:00, DQ0001 on d3 19:00, DR0001 on d1 21:00, all party 4. Expected DP [d2], DQ [d3] unchanged although d2 is free, DR [d2]; moved 2, unused 0. Two bookings that must move can never compete for one seat (both sit on the one closed table, so their times are disjoint), so the rank vector is exercised by each mover taking the lowest equal option.
+467. **OPT-E** Own accepted terms. Tables e1 4 (closed), e2 4, e3 2; EP0001 party 4 seeded under policy 0; then a policy effective THU sets e2 2, e3 6. Expected [e2] (4 seats under its own terms, unused 0), not [e3].
+468. **OPT-F1** A declared pair is used when no single fits: tables f1 4 (closed), f2 2, f3 2, f4 2, combinable [f2,f3]; FP0001 party 4. Expected [f2,f3].
+469. **OPT-F2/F3/F4** With a fixed booking on f2 at 20:00 and the closure 19:00-19:30, f2 is blocked during FP's time and the only fitting set is the undeclared f3+f4: 409 `no_feasible_plan`, nothing changes, and the key is reusable.
+470. **OPT-G** A fixed booking outside the closure blocks a candidate: tables g1 4 (closed), g2 4, g3 6; GP0001 party 4 at 19:00, GF0001 on g2 at 20:00; closure 19:00-19:30. Expected GP [g3] (unused 2); GF is not considered.
+471. **OPT-H** A previously applied closure blocks its table: close h1 first (HP0001 on h2 considered, unchanged), then close h2. Expected HP [h3] (unused 2), not h1.
+472. **OPT-I1/I2/I3** No feasible plan (tables i1 4 closed, i2 2; IP0001 party 4): 409 `no_feasible_plan`, nothing changed (revision, booking, history, availability), and the key is reusable.
+473. **OPT-J** A chain move when necessary: tables j1 6 (closed), j2 6, j3 2; JP0001 party 6, JQ0001 party 2 on j2. Expected JP [j2], JQ [j3], moved 2, unused 0.
+474. **OPT-K1** With equal unused seats a single (k2, rank 1) beats a declared pair (k3+k4, rank 4).
+475. **OPT-K2** When the single is occupied (KQ0001 on k2) the pair is chosen rather than moving the occupant: KP [k3,k4], KQ unchanged, moved 1.
+476. **OPT-L/L2** Considered set: closure g1 19:30-21:00. Not considered: a booking ending at 19:30, a booking starting at 21:00, a non-overlapping booking on the closed table, a cancelled overlapping booking. Considered: SD0001 (stays on g2) and SE0001 (moves to g3); moved 1, unused 4. After applying, the non-considered bookings keep table and revision.
+
+## LIM - planning limits
+
+477. **LIM-1** 6 tables, 4 declared pairs and 6 considered bookings return the exact optimum (LP0001 to l2, the others unchanged, moved 1, unused 0).
+478. **LIM-2/3/4** 7 tables, 5 declared pairs, or 7 considered bookings: either 422 `planning_limit` with nothing changed, or the exact optimum.
+
+## APP - apply
+
+479. **APP-1** No token is 401.
+480. **APP-2a/b** An unknown plan, or a plan addressed through another restaurant, is 404 `not_found`.
+481. **APP-3** A diner is 403 `forbidden`.
+482. **APP-4/4b** Missing key is 400; refused applications change nothing.
+483. **APP-5** Apply is 201 with `plan_id`, `restaurant_revision` equal to the preview's plus 1 and to the detail, and the reservations of every considered booking in reference order.
+484. **APP-6** A moved booking: revision +1, new `table_ids` with `table_id` for a single, identical reference, id, times, party, `created_at`, status and accepted terms.
+485. **APP-7** An unmoved considered booking is returned unchanged.
+486. **APP-8** A moved booking gains exactly one `reassigned` entry: `table_ids` change with complete before and after lists, the `plan_id`, the resulting revision, unchanged accepted terms, next `seq`.
+487. **APP-9** An unmoved booking gains nothing.
+488. **APP-10** Decision shows the new revision with the same terms.
+489. **APP-11** A second application under a different key is 409 `plan_already_applied`.
+490. **APP-12** A preview taken before the application is then 409 `stale_plan`.
+491. **APP-13** Replay of the successful key is 200 with the original response even after a later cancel.
+492. **APP-14** Refused and replayed applications change no revision.
+493. **APP-15** An apply body with unknown fields is accepted.
+494. **APP-16** A plan spanning two series occurrences considers both.
+495. **APP-17** The series revision increases exactly once for the plan and exception flags (including a true one) are unchanged.
+496. **APP-18** Moved occurrences keep dates, references, times, party and accepted terms.
+497. **APP-19** After each of these at the same restaurant between preview and apply, the plan is 409 `stale_plan` and nothing changes: a new booking, a real amendment, a cancellation, a policy publication, a series adoption, a successful batch, another plan's application, a series amendment.
+498. **APP-20** A booking at another restaurant does not invalidate the plan.
+499. **APP-21** 10 concurrent applications of one plan: exactly one 201, the rest 409 (`plan_already_applied` or `stale_plan`), the booking moved once with one `reassigned` entry.
+500. **APP-22** Concurrent applications of two plans for one restaurant: one 201 and one 409 `stale_plan`.
+501. **APP-23** A closure applied at another restaurant does not invalidate this plan.
+
+## CLS - closure effects
+
+502. **CLS-0** A booking on the closed table is moved to the tight single.
+503. **CLS-1** The closed table and every pair containing it are absent from `available_table_ids` and `available_options` for slots overlapping the closure.
+504. **CLS-2** The closed table is offered again for slots after the closure.
+505. **CLS-3** Explain reports `no_overlap` false (capacity true) for the closed table during the closure and true afterwards.
+506. **CLS-4** The moved booking occupies its new table.
+507. **CLS-5a-d** A booking on the closed table during the closure (also overlapping its start) and a pair containing it are 409 `table_unavailable`; a booking starting when the closure ends is 201.
+508. **CLS-6/7** An amendment and a batch move onto the closed table during the closure are 409 `table_unavailable`.
+509. **CLS-8** An adoption whose occurrence lands on a closed table is 409 `table_unavailable`.
+510. **CLS-9a/b** A closure in the past behaves the same; other tables that day stay bookable.
+511. **CLS-10** Reset clears closures.
+
+## SAM - series amendments
+
+512. **SAM-1** No token is 401.
+513. **SAM-2a/b** An unknown series and another owner's series are 404.
+514. **SAM-3** Missing key is 400.
+515. **SAM-4** `expected_revision` 0, -1, true, a string, 1.5; `from_index` -1, equal to count, true, a string, 1.5; `local_time` 24:00, 7:00, 07:00:00, 07:0, 19:60, empty, a date-time; and each field missing are 422 `validation_failed`. **SAM-4b** a non-string `local_time` is 400 or 422.
+516. **SAM-5** `00:00` and `23:59` are shape-valid (refused only by the schedule).
+517. **SAM-6/6b** A stale `expected_revision` is 409 `stale_revision` before booking validation; refusals change nothing.
+518. **SAM-7** 201 with the current series: occurrences 1-3 move to 19:30 on their own dates although each new slot overlaps its old one; unknown fields are ignored.
+519. **SAM-8** Each changed occurrence gains one `changed` entry naming only `starts_at_local` and one revision; occurrence 0 is unchanged.
+520. **SAM-9/9b** Series and restaurant revisions increase once each; no exception is marked; tables, party and references are kept.
+521. **SAM-10/11** Replay is 200 identical; the same key with another body is 409.
+522. **SAM-12** An all-no-op amendment is 201 with no revision, history or counter change.
+523. **SAM-13** Exception and cancelled occurrences are not eligible.
+524. **SAM-14** An empty eligible set is a 201 that changes nothing.
+525. **SAM-15** An earlier replay still returns the original response after further edits and cancellations.
+526. **SAM-16/16b** Each real change adopts its resulting date's policy (versions 0, 0, 1, 1; ends 21:00, 21:00, 20:30, 20:30).
+527. **SAM-17a/b** Off-grid time is 422 `not_on_slot_grid`; a time ending after closing is 422 `outside_opening_hours`.
+528. **SAM-18/18b/18c** A nonexistent local time at index 2 precedes an occupancy conflict at index 0 (422 `invalid_local_time`, nothing changed); without the gap the conflict is 409 `table_unavailable`.
+529. **SAM-19a/b/c** A conflict with another booking, with an unchanged (exception) occurrence, or with an applied closure is 409 `table_unavailable`.
+530. **SAM-20/21** A seating repair moves an occurrence without marking an exception; it stays eligible and keeps its new table when the series is amended.
+531. **SAM-22** 8 concurrent amendments from one expected revision: exactly one 201, seven 409 `stale_revision`.
+532. **SAM-23a/b/c** A change outside the old accepted cutoff succeeds and adopts the new cutoff; the next change finds occurrence 0 within that cutoff (409 `cutoff_passed`), which precedes its own validation error.
+
+## UPG4 - upgrade from stage-1, stage-2 and stage-3 exports
+
+`fixtures/stage3_export.json` was captured from the accepted stage-3 image (2586c6b): a managed
+restaurant with one policy, an amended booking, a series with an exception and a cancelled
+occurrence, a batch receipt, a lost-response key, a failed key and two sessions.
+
+533. **UPG4-1/2** The stage-3 export imports with 204; its session tokens work.
+534. **UPG4-3** The restaurant revision is the exported value.
+535. **UPG4-4/5/6** Reservations, every history, the series and the policies are intact.
+536. **UPG4-7a-e** Stage-3 receipts (booking, series, batch, lost-response key, policy) replay with exactly their original bodies.
+537. **UPG4-8** A failed stage-3 key is a first use.
+538. **UPG4-9** A series amendment works on the imported series; the exception and cancelled occurrences are excluded.
+539. **UPG4-10** A replan on the imported restaurant moves an imported occurrence and increments its series revision once, flags unchanged.
+540. **UPG4-11** Untouched imported histories stay intact.
+541. **UPG4-12** After a stage-1 or stage-2 import the restaurant revision is 0.
+542. **UPG4-13** Imported stage-1 and stage-2 bookings can be adopted and the series amended.
+543. **UPG4-14** Imported stage-1/2 restaurants have no managers: a replan is 403.
+
+## RT4 - stage-4 round trip
+
+544. **RT4-1** An export with an applied closure, a pending plan and a series amendment imports with 204.
+545. **RT4-2** Reservations, histories, series, restaurant revision and availability (with the closure) are identical after the round trip.
+546. **RT4-3/4** The applied plan's and the series amendment's receipts replay with the original responses.
+547. **RT4-5** The applied plan is still `plan_already_applied`.
+548. **RT4-6** The pending plan survived and still applies.
+549. **RT4-7** The imported closure still rejects bookings on its table.
+
+## CON4 - concurrency
+
+550. **CON4-1** 50 in-flight previews, applications, series amendments, publications, bookings and amendments: no exception, no 5xx.
+551. **CON4-2** At most one of eight applications of two plans succeeds; the rest are 409 `stale_plan` or `plan_already_applied`.
+552. **CON4-3** Four concurrent series amendments from one revision: exactly one 201, three 409 `stale_revision`.
+553. **CON4-4** Concurrent publications get contiguous versions.
+554. **CON4-5** Racing bookings per table: exactly one 201.
+555. **CON4-6/7** Amendments at another restaurant and previews all succeed.
+556. **CON4-8** Every concurrent read is consistent.
+557. **CON4-9** Afterwards no confirmed booking sits on a closed table during its closure and no table is double-booked.
+558. **CON4-10** Every booking's revision equals its history length.
+
+## UI-PLAN - screens after an applied plan (browser, 1280 and 375 px)
+
+559. **UI-L1** The grid matches `GET /availability` after the plan.
+560. **UI-L2** The closed table's cells are unavailable for every slot overlapping the closure.
+561. **UI-L3** Pair cells containing the closed table are absent or unavailable during the closure.
+562. **UI-L4** The moved booking's old table is free again once the closure ends and its new table is taken.
+563. **UI-L5** No horizontal scrolling with the plan applied.
+564. **UI-L6** Lookup of the moved booking shows the new table label, not the closed one.
+565. **UI-L7** Booking the freed table right after the closure works through the screens.
+
+## Not automated (stage 4)
+
+566. **N4-1** Two bookings that must move cannot compete for the same seat (both are on the one closed table, so their times are disjoint); the rank vector's "earlier reference wins a contested seat" case is therefore not constructible and not probed.
+567. **N4-2** The confirmation screen of a booking moved later: a resubmit of the unchanged form replays the original response (§7), so it shows the original table; only the lookup screen is asserted to show the new table.
+568. **N4-3** Whether `Z` counts as an explicit offset: either reading is accepted (RPV-6c).
+569. **N4-4** Beyond the planning limits either 422 `planning_limit` or the exact optimum is accepted, as the document allows.
+570. **N4-5** Whether a concurrent duplicate application reports `plan_already_applied` or `stale_plan`: both are accepted, because the first application both applies the plan and changes the revision.
+571. **N4-6** Cutoff probes for series amendments run on `Etc/UTC` about 70-80 minutes ahead and may misbehave within about 90 minutes of midnight UTC.
