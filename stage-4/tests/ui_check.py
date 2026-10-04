@@ -383,6 +383,45 @@ def run(browser, viewport, label):
     check(f"{label} s3 earlier date uses fixture rules", page.get_attribute(sel("slot-t_2-19:00"), "data-available") == "true"
           and "seats 4" in page.text_content(sel("slot-t_2-19:00")))
 
+    # Stage 4: an applied seating plan shows on the availability, confirmation and
+    # lookup screens.
+    reset(restaurants=[restaurant(manager_user_ids=["u_ada"])])
+    log_in(page)
+    token = api("POST", "/auth/login", {"email": ADA["email"], "password": ADA["password"]})[1]["token"]
+    search(page, party=2)
+    page.click(sel("slot-t_2-19:00"))
+    page.wait_for_selector(sel("booking-form"))
+    page.click(sel("booking-submit"))
+    page.wait_for_selector(sel("confirmation"))
+    ref4 = page.text_content(sel("confirmation-reference")).strip()
+    check(f"{label} s4 booked table 2", "Table 2" in page.text_content(sel("confirmation-tables")))
+    tz = ZoneInfo("Europe/Berlin")
+    frm = dt.datetime.combine(dt.date.fromisoformat(DATE), dt.time(18, 0), tzinfo=tz).isoformat()
+    to = dt.datetime.combine(dt.date.fromisoformat(DATE), dt.time(23, 0), tzinfo=tz).isoformat()
+    st, plan = api("POST", "/restaurants/r_anker/replans", {"table_id": "t_2", "from": frm, "to": to}, token=token, key=uuid.uuid4().hex)
+    check(f"{label} s4 plan moves the booking", st == 201 and plan["assignments"] == [{"reference": ref4, "table_ids": ["t_1"], "changed": True}], json.dumps(plan)[:200])
+    st, _ = api("POST", f"/restaurants/r_anker/replans/{plan['plan_id']}/apply", {}, token=token, key=uuid.uuid4().hex)
+    check(f"{label} s4 plan applied", st == 201)
+    page.click(sel("booking-submit"))          # unchanged form: replays the original receipt
+    page.wait_for_function("document.querySelector(\"[data-testid='confirmation-tables']\").textContent.includes('Table 1')", timeout=5000)
+    tables = page.text_content(sel("confirmation-tables"))
+    check(f"{label} s4 confirmation shows new table", "Table 1" in tables and "Table 2" not in tables
+          and page.text_content(sel("confirmation-reference")).strip() == ref4 and page.query_selector(sel("booking-error")) is None, tables)
+    check(f"{label} s4 confirmation details", "Table 1" in page.text_content(sel("confirmation-details")))
+    page.goto("/lookup")
+    page.fill(sel("lookup-reference-input"), ref4)
+    page.click(sel("lookup-submit"))
+    page.wait_for_selector(sel("reservation-detail"))
+    check(f"{label} s4 lookup shows new table", "Table 1" in page.text_content(sel("reservation-tables")))
+    search(page, party=2)
+    check(f"{label} s4 grid closes table and pairs", page.get_attribute(sel("slot-t_2-19:00"), "data-available") == "false"
+          and page.get_attribute(sel("slot-t_1+t_2-19:00"), "data-available") == "false"
+          and page.get_attribute(sel("slot-t_1-21:30"), "data-available") == "true")
+    check(f"{label} s4 grid no horizontal scroll", no_horizontal_scroll(page))
+    nxt = (dt.date.fromisoformat(DATE) + dt.timedelta(days=1)).isoformat()
+    search(page, party=2, date=nxt)
+    check(f"{label} s4 table open outside the closure", page.get_attribute(sel("slot-t_2-19:00"), "data-available") == "true")
+
     check(f"{label} zero external requests", not external, str(external[:3]))
     ctx.close()
 
