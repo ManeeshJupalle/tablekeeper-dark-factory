@@ -1,2 +1,3 @@
 /tablekeeper
 *.exe
+__pycache__/
