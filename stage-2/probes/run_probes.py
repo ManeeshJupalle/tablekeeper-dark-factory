@@ -1708,14 +1708,15 @@ def g_upgrade():
         and len(rep.json["reservations"]) == 1 and s1_equiv(exp["m1"]["reservations"][0], rep.json["reservations"][0]) \
         and set(rep.json) == set(exp["m1"])
     check("UPG-5b", "stage-1 replay on /reservation-moves is 200 with the original body (plus table_ids at most)", ok, "orig=%r got=%r" % (exp["m1"], rep))
+    a = avail("r_combo", thu, 1)
+    L = thu + "T19:00"
+    check("UPG-7a", "imported reservations occupy their tables (c_c at 19:00 and c_d at 21:30 blocked; cancelled c_a at 20:30 free)",
+          a.status == 200 and "c_c" not in (singles_at(a, L) or ["c_c"]) and "c_a" in (singles_at(a, L) or [])
+          and "c_a" in (singles_at(a, thu + "T20:30") or []) and "c_d" not in (singles_at(a, thu + "T21:30") or ["c_d"])
+          and all(isinstance(s.get("available_options"), list) for s in a.json["slots"]), repr(slot_map(a)))
     r = call("POST", "/reservations", body=dict(exp["bf"], party_size=2), token=tokH, key=exp["kf"])
     check("UPG-6a", "a stage-1 key that failed is a first use after import (201)", r.status == 201, repr(r))
     expect_err("UPG-6b", "a stage-1 key with a different body is 409 idempotency_key_reuse", call("POST", "/reservations", body=dict(exp["b1"], party_size=1), token=tokH, key=exp["k1"]), 409, "idempotency_key_reuse")
-    a = avail("r_combo", thu, 1)
-    L = thu + "T19:00"
-    check("UPG-7a", "imported reservations occupy their tables (c_c at 19:00, c_d at 21:30 blocked; cancelled c_a free)",
-          a.status == 200 and "c_c" not in (singles_at(a, L) or ["c_c"]) and "c_a" in (singles_at(a, L) or []) and "c_d" not in (singles_at(a, thu + "T21:30") or ["c_d"])
-          and all(isinstance(s.get("available_options"), list) for s in a.json["slots"]), repr(slot_map(a)))
     expect_err("UPG-7b", "with no combinable in the imported state a pair booking is 422 combination_not_allowed", book2(tokH, "r_combo", ["c_a", "c_b"], thu + "T20:30", 2), 422, "combination_not_allowed")
     reset(base_fixture())
     expect_err("UPG-8", "reset after the upgrade import clears everything (stage-1 token 401)", call("GET", "/reservations", token=tokH), 401, "unauthenticated")

@@ -135,6 +135,16 @@ def ui_search(page, rid, date, party, navigate=True, wait=True):
     return True
 
 
+def click_unavailable(page, testid):
+    """Click a cell expected to be unavailable. A disabled control is compliant ("does nothing"),
+    so actionability checks are skipped; the caller asserts that nothing happened."""
+    try:
+        tid(page, testid).first.click(force=True, timeout=2000)
+    except PWTimeout:
+        pass
+    time.sleep(0.5)
+
+
 def cell(table_ids, hhmm):
     return "slot-%s-%s" % ("+".join(table_ids), hhmm)
 
@@ -263,8 +273,7 @@ def g_grid():
     ctx, page = new_page()
     ui_login(page, "hana@probe.test", "hana-secret-9")
     ui_search(page, "r_combo", THU, 4)
-    tid(page, cell(["c_d"], "19:00")).first.click()
-    time.sleep(0.5)
+    click_unavailable(page, cell(["c_d"], "19:00"))
     check("UI-8a", "clicking an unavailable cell opens no booking-form", count(page, "booking-form") == 0, "")
     tid(page, cell(["c_c"], "19:00")).first.click()
     ok = wait_visible(page, "booking-form")
@@ -310,9 +319,26 @@ def g_out_of_order():
     page.route("**/availability**", handler)
     ui_search(page, "r_lumen", THU, 2, navigate=False, wait=False)
     time.sleep(0.3)
-    ok = ui_search(page, "r_combo", THU, 4, navigate=False)
-    check("UI-12a", "search B (r_combo) rendered while search A (r_lumen) is still pending", ok and count(page, cell(["c_c"], "19:00")) == 1 and count(page, cell(["t_quad"], "19:00")) == 0 and len(held) == 1,
-          "held=%d" % len(held))
+    try:
+        ok = ui_search(page, "r_combo", THU, 4, navigate=False)
+        why = "held=%d" % len(held)
+    except PWTimeout:
+        btn = tid(page, "search-button").first
+        ok, why = False, "search B could not be started while search A was pending (search-button disabled=%s, text=%r)" % (
+            btn.is_disabled(), btn.inner_text().strip())
+    check("UI-12a", "search B (r_combo) rendered while search A (r_lumen) is still pending", ok and count(page, cell(["c_c"], "19:00")) == 1 and count(page, cell(["t_quad"], "19:00")) == 0 and len(held) == 1, why)
+    if not ok:
+        for cid, desc in (("UI-12b", "after A's late response the grid still describes B"),
+                          ("UI-12c", "after A's late response the booking form still describes B")):
+            check(cid, desc, False, "not reached: " + why)
+        for r in held:
+            try:
+                r.continue_()
+            except Exception:  # noqa
+                pass
+        page.unroute("**/availability**")
+        ctx.close()
+        return
     tid(page, cell(["c_c"], "19:00")).first.click()
     wait_visible(page, "booking-form")
     try:

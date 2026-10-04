@@ -323,7 +323,7 @@ original responses. Both files contain only throwaway test credentials for fixtu
 215. **UI-5** After a search the grid has exactly one cell `slot-{table_id}-{HH:MM}` per table per slot, and `data-available` equals membership in `available_table_ids` for the searched party size.
 216. **UI-6** Combination cells `slot-{t_a}+{t_b}-{HH:MM}` use `combinable` order and are `data-available="true"` exactly for pairs in `available_options`; a pair not available is absent or `false`.
 217. **UI-7** A closed day shows `no-slots` and no `availability-grid`.
-218. **UI-8** Clicking an unavailable cell opens no `booking-form`; clicking an available cell while signed out shows `auth-error` or navigates to `/login`.
+218. **UI-8** Clicking an unavailable cell opens no `booking-form` (a disabled cell is compliant; the probe clicks without actionability checks); clicking an available cell while signed out shows `auth-error` or navigates to `/login`.
 219. **UI-9** Clicking an available cell while signed in opens `booking-form` with `booking-party-size` equal to the searched size and `booking-summary` naming the table label and the local start time.
 220. **UI-10** Submitting shows `confirmation` with `confirmation-reference` exactly the reference known to the API and `confirmation-details` containing restaurant name, table label and local start.
 221. **UI-11** A combination booking: `booking-summary` names both labels, `confirmation-tables` contains both labels, the API reservation holds both ids.
