@@ -203,7 +203,7 @@
           options.append(cell([t.id], hhmm, slot.available_table_ids.includes(t.id), slot));
         }
         if (pairs.length) {
-          options.append(el('span', { class: 'group-label', text: 'Combined tables for larger parties' }));
+          options.append(el('span', { class: 'group-label', text: 'Combined tables' }));
           for (const p of pairs) {
             const open = (slot.available_options || []).some(o => o.table_ids.length === 2 && o.table_ids[0] === p[0] && o.table_ids[1] === p[1]);
             options.append(cell([p[0], p[1]], hhmm, open, slot));
@@ -270,7 +270,11 @@
       renderBooking();
       markSelected();
       const first = $('[data-testid="booking-party-size"]', panel);
-      if (first && window.matchMedia('(min-width: 900px)').matches) first.focus();
+      if (window.matchMedia('(min-width: 900px)').matches) {
+        if (first) first.focus();
+      } else {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); // the form sits below the grid on small screens
+      }
     }
 
     function renderBooking() {
@@ -362,6 +366,7 @@
       if ((result.status === 201 || result.status === 200) && result.data && result.data.reference) {
         b.confirmation = result.data; b.error = null; b.uncertain = null;
         renderOutcome();
+        if (current) runSearch(current.params, true); // the taken seating greys out in the grid
         return;
       }
       if (result.status >= 500 || result.data === null) {

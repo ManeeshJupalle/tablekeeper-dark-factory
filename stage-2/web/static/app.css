@@ -102,6 +102,9 @@ input:focus, select:focus { border-color: var(--terracotta); outline: 3px solid 
 .notice-success { background: var(--sage-soft); border-color: #b9d4bf; color: var(--sage); }
 .notice-info { background: #f1ebe2; border-color: var(--line); color: var(--ink-soft); }
 .notice a { color: inherit; font-weight: 600; }
+.notice .btn { text-decoration: none; }
+.notice .btn-primary { color: #fff; }
+.notice .btn-secondary { color: var(--ink); background: var(--paper); }
 .empty-state { color: var(--muted); background: var(--paper); border: 1px dashed var(--line-strong); border-radius: var(--radius); padding: 26px 20px; text-align: center; }
 .loading { color: var(--muted); display: flex; align-items: center; gap: 10px; padding: 18px 4px; }
 .loading::before { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid var(--line-strong); border-top-color: var(--terracotta); animation: spin 0.8s linear infinite; flex: none; }
