@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end checks for Tablekeeper stage 1 against a running service.
+"""End-to-end checks for Tablekeeper stage 2 (stage-1 rules included) against a running service.
 
-Usage: python3 tests/smoke.py http://127.0.0.1:8080
+Usage: python3 tests/smoke.py http://127.0.0.1:8080 [http://stage1-service:8080]
+
+The optional second URL is a running stage-1 service; its export is imported here
+to check the upgrade path.
 
 Standard library only. Every requirement in the stage-1 document is exercised at
 least once: each endpoint, each error code, the DST rules, idempotent replay,
@@ -197,7 +200,7 @@ def test_restaurants_and_availability():
     body = call("GET", "/restaurants").json()
     check("restaurant list", body["restaurants"] == [{"id": "r_anker", "name": "Zum Anker", "timezone": "Europe/Berlin"}], str(body))
     detail = call("GET", "/restaurants/r_anker").json()
-    check("detail shape", detail == restaurant(), json.dumps(detail))
+    check("detail shape", detail == {**restaurant(), "combinable": []}, json.dumps(detail))
     expect("unknown restaurant", call("GET", "/restaurants/r_nope"), 404, "not_found")
 
     av = availability("r_anker", DATE, 2).json()
@@ -584,7 +587,145 @@ def test_concurrency():
     check("moves race: one winner", counts.get(201) == 1 and counts.get(409) == 49, str(counts))
 
 
+# ---- stage 2 ------------------------------------------------------------------
+
+def combo_restaurant(**over):
+    return restaurant(combinable=[["t_1", "t_2"], ["t_2", "t_3"]], **over)
+
+
+def slot_at(rid, date, party, hhmm):
+    return next(s for s in availability(rid, date, party).json()["slots"] if s["starts_at_local"].endswith(hhmm))
+
+
+def test_stage2_api():
+    for bad in ([["t_1"]], [["t_1", "t_2", "t_3"]], [["t_1", "t_1"]], [["t_1", "t_x"]], ["t_1"], [[1, 2]], "x"):
+        expect(f"s2 bad combinable {json.dumps(bad)}", reset(fixture(restaurants=[restaurant(combinable=bad)])), 422, "validation_failed")
+    reset(fixture(restaurants=[combo_restaurant()]))
+    ada = login(ADA["email"], ADA["password"])
+    bob = login(BOB["email"], BOB["password"])
+    detail = call("GET", "/restaurants/r_anker").json()
+    check("s2 detail combinable", detail["combinable"] == [["t_1", "t_2"], ["t_2", "t_3"]], json.dumps(detail["combinable"]))
+
+    # availability options
+    slot = slot_at("r_anker", DATE, 2, "19:00")
+    check("s2 options party 2", slot["available_options"] == [
+        {"table_ids": ["t_1"], "capacity": 2}, {"table_ids": ["t_2"], "capacity": 4}, {"table_ids": ["t_3"], "capacity": 6},
+        {"table_ids": ["t_1", "t_2"], "capacity": 6}, {"table_ids": ["t_2", "t_3"], "capacity": 10}], json.dumps(slot["available_options"]))
+    check("s2 available_table_ids unchanged", slot["available_table_ids"] == ["t_1", "t_2", "t_3"])
+    slot = slot_at("r_anker", DATE, 7, "19:00")
+    check("s2 options party 7", slot["available_options"] == [{"table_ids": ["t_2", "t_3"], "capacity": 10}] and slot["available_table_ids"] == [], json.dumps(slot))
+
+    # response shape: table_ids always, table_id only for singles
+    post = lambda b, token=ada: call("POST", "/reservations", body=b, token=token, key=new_key())
+    body = lambda **o: {"restaurant_id": "r_anker", "starts_at_local": f"{DATE}T21:30", "party_size": 2, **o}
+    single = expect("s2 single via table_id", book(ada, table="t_1", party=2, at=f"{DATE}T18:00"), 201).json()
+    check("s2 single shape", single["table_ids"] == ["t_1"] and single["table_id"] == "t_1", json.dumps(single))
+    single2 = expect("s2 single via table_ids", post(body(table_ids=["t_3"], starts_at_local=f"{DATE}T18:00")), 201).json()
+    check("s2 single2 shape", single2["table_ids"] == ["t_3"] and single2["table_id"] == "t_3")
+    slot = slot_at("r_anker", DATE, 2, "18:00")
+    check("s2 single blocks pair", [o["table_ids"] for o in slot["available_options"]] == [["t_2"]], json.dumps(slot["available_options"]))
+    expect("s2 pair blocked by single", post(body(table_ids=["t_1", "t_2"], starts_at_local=f"{DATE}T18:00", party_size=5), bob), 409, "table_unavailable")
+    combo = expect("s2 pair ok", post(body(table_ids=["t_2", "t_1"], starts_at_local=f"{DATE}T20:00", party_size=6)), 201).json()
+    check("s2 pair shape (combinable order, no table_id)", combo["table_ids"] == ["t_1", "t_2"] and "table_id" not in combo, json.dumps(combo))
+    check("s2 pair in list", any(r["table_ids"] == ["t_1", "t_2"] and "table_id" not in r for r in call("GET", "/reservations", token=ada).json()["reservations"]))
+    check("s2 pair get", call("GET", f"/reservations/{combo['reference']}", token=ada).json() == combo)
+    slot = slot_at("r_anker", DATE, 2, "20:00")
+    check("s2 pair occupies both", slot["available_table_ids"] == ["t_3"] and [o["table_ids"] for o in slot["available_options"]] == [["t_3"]], json.dumps(slot))
+    expect("s2 single blocked by pair", book(bob, table="t_2", party=2, at=f"{DATE}T21:00"), 409, "table_unavailable")
+    expect("s2 other pair blocked by pair", post(body(table_ids=["t_2", "t_3"], starts_at_local=f"{DATE}T21:00", party_size=8), bob), 409, "table_unavailable")
+
+    # error codes
+    expect("s2 both fields", post(body(table_id="t_3", table_ids=["t_3"])), 422, "validation_failed")
+    expect("s2 duplicate", post(body(table_ids=["t_3", "t_3"])), 422, "validation_failed")
+    expect("s2 empty set", post(body(table_ids=[])), 422, "validation_failed")
+    expect("s2 three tables", post(body(table_ids=["t_1", "t_2", "t_3"])), 422, "combination_not_allowed")
+    expect("s2 undeclared pair", post(body(table_ids=["t_1", "t_3"])), 422, "combination_not_allowed")
+    expect("s2 pair capacity", post(body(table_ids=["t_1", "t_2"], party_size=7)), 422, "party_exceeds_capacity")
+    expect("s2 pair unknown table", post(body(table_ids=["t_1", "t_x"])), 404, "not_found")
+    expect("s2 table_ids wrong type", post(body(table_ids="t_3")), 400, "malformed_request")
+    expect("s2 table_ids element wrong type", post(body(table_ids=[3])), 400, "malformed_request")
+    expect("s2 neither field", post(body()), 422, "validation_failed")
+
+    # PATCH and moves with table_ids
+    p = expect("s2 patch to pair", call("PATCH", f"/reservations/{single2['reference']}", body={"table_ids": ["t_2", "t_3"], "starts_at_local": f"{DATE}T21:30", "party_size": 9}, token=ada), 200).json()
+    check("s2 patch pair shape", p["table_ids"] == ["t_2", "t_3"] and "table_id" not in p, json.dumps(p))
+    expect("s2 patch undeclared", call("PATCH", f"/reservations/{single2['reference']}", body={"table_ids": ["t_1", "t_3"]}, token=ada), 422, "combination_not_allowed")
+    expect("s2 patch both", call("PATCH", f"/reservations/{single2['reference']}", body={"table_id": "t_3", "table_ids": ["t_3"]}, token=ada), 422, "validation_failed")
+    p = expect("s2 patch back to single", call("PATCH", f"/reservations/{single2['reference']}", body={"table_id": "t_3", "party_size": 2}, token=ada), 200).json()
+    check("s2 patch single shape", p["table_ids"] == ["t_3"] and p["table_id"] == "t_3")
+    mv = expect("s2 move to pair", call("POST", "/reservation-moves", body={"moves": [{"reference": single["reference"], "table_ids": ["t_1", "t_2"], "starts_at_local": f"{DATE}T18:00", "party_size": 6}]}, token=ada, key=new_key()), 201).json()
+    check("s2 move shape", mv["reservations"][0]["table_ids"] == ["t_1", "t_2"])
+    expect("s2 move batch sharing a table", call("POST", "/reservation-moves", body={"moves": [
+        {"reference": single["reference"], "table_ids": ["t_1", "t_2"], "starts_at_local": f"{DATE}T21:30"},
+        {"reference": single2["reference"], "table_ids": ["t_2", "t_3"], "starts_at_local": f"{DATE}T21:30"}]}, token=ada, key=new_key()), 409, "table_unavailable")
+    expect("s2 cancel pair", call("POST", f"/reservations/{combo['reference']}/cancel", token=ada), 200)
+    check("s2 cancel frees both", slot_at("r_anker", DATE, 2, "20:00")["available_table_ids"] == ["t_1", "t_2", "t_3"])
+
+    # seeded reservations with table_ids / status
+    pair_seed = {k: v for k, v in seed(DATE, reference="SEEDPAIR", party_size=6).items() if k != "table_id"}
+    pair_seed["table_ids"] = ["t_1", "t_2"]
+    cxl_seed = {**seed(DATE, reference="SEEDCXL", at="21:30", status="cancelled"), "id": "res_cxl"}
+    expect("s2 reset seeded pair", reset(fixture(restaurants=[combo_restaurant()], reservations=[pair_seed, cxl_seed])), 204)
+    ada = login(ADA["email"], ADA["password"])
+    got = call("GET", "/reservations/SEEDPAIR", token=ada).json()
+    check("s2 seeded pair shape", got["table_ids"] == ["t_1", "t_2"] and "table_id" not in got, json.dumps(got))
+    check("s2 seeded cancelled free", "t_2" in slot_tables("r_anker", DATE, 2, "21:30"))
+    check("s2 seeded pair occupies", slot_tables("r_anker", DATE, 2, "19:00") == ["t_3"])
+    expect("s2 seeded both fields", reset(fixture(restaurants=[combo_restaurant()], reservations=[{**seed(DATE), "table_ids": ["t_2"]}])), 422, "validation_failed")
+
+    # export/import round trip keeps table sets and combinable
+    reset(fixture(restaurants=[combo_restaurant()]))
+    ada = login(ADA["email"], ADA["password"])
+    combo = expect("s2 pair before export", post(body(table_ids=["t_1", "t_2"], starts_at_local=f"{DATE}T19:00", party_size=6), ada), 201).json()
+    snap = call("GET", "/_test/export").json()
+    reset(fixture())
+    expect("s2 import", call("POST", "/_test/import", body=snap), 204)
+    check("s2 import keeps pair", call("GET", f"/reservations/{combo['reference']}", token=ada).json() == combo)
+    check("s2 import keeps combinable", call("GET", "/restaurants/r_anker").json()["combinable"] == [["t_1", "t_2"], ["t_2", "t_3"]])
+    # concurrency: 50 different users race for one pair and its members
+    users = [dict(ADA, id=f"u_{i}", email=f"r{i}@example.com") for i in range(50)]
+    reset(fixture(users=users, restaurants=[combo_restaurant()]))
+    tokens = burst(lambda i: login(users[i]["email"], users[i]["password"]), 50)
+    out = burst(lambda i: post(body(table_ids=["t_1", "t_2"], starts_at_local=f"{DATE}T19:00", party_size=6) if i % 2 else body(table_id="t_2", starts_at_local=f"{DATE}T19:00", party_size=2), tokens[i]), 50)
+    counts = tally(out)
+    check("s2 pair/single race: one winner", counts.get(201) == 1 and counts.get(409) == 49, str(counts))
+
+
+def test_stage1_upgrade(stage1_url):
+    """Import an export produced by the stage-1 service (format_version 1, table_id only)."""
+    def s1(method, path, body=None, token=None, key=None):
+        hdrs = {"Content-Type": "application/json"}
+        if token:
+            hdrs["Authorization"] = f"Bearer {token}"
+        if key:
+            hdrs["Idempotency-Key"] = key
+        req = urllib.request.Request(stage1_url + path, data=json.dumps(body).encode() if body is not None else None, method=method, headers=hdrs)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read() or b"null")
+    assert s1("POST", "/_test/reset", fixture())[0] == 204
+    token = s1("POST", "/auth/login", {"email": ADA["email"], "password": ADA["password"]})[1]["token"]
+    key = new_key()
+    body = {"restaurant_id": "r_anker", "table_id": "t_2", "starts_at_local": f"{DATE}T19:00", "party_size": 4}
+    receipt = s1("POST", "/reservations", body, token, key)[1]
+    snap = s1("GET", "/_test/export")[1]
+    check("upgrade: stage-1 export has no combinable", "combinable" not in snap["state"]["restaurants"][0])
+    reset(fixture(restaurants=[restaurant("r_other")]))
+    expect("upgrade import", call("POST", "/_test/import", body=snap), 204)
+    expect("upgrade token valid", call("GET", "/reservations", token=token), 200)
+    got = call("GET", f"/reservations/{receipt['reference']}", token=token).json()
+    check("upgrade reservation kept", got["reference"] == receipt["reference"] and got["table_ids"] == ["t_2"] and got["table_id"] == "t_2"
+          and got["reservation_id"] == receipt["reservation_id"] and got["created_at"] == receipt["created_at"], json.dumps(got))
+    rep = expect("upgrade replay", call("POST", "/reservations", body=body, token=token, key=key), 200).json()
+    check("upgrade replay body", rep == receipt)
+    check("upgrade combinable empty", call("GET", "/restaurants/r_anker").json()["combinable"] == [])
+    expect("upgrade login", call("POST", "/auth/login", body={"email": ADA["email"], "password": ADA["password"]}), 200)
+    expect("upgrade import twice", call("POST", "/_test/import", body=snap), 204)
+    check("upgrade no duplicates", len(call("GET", "/reservations", token=token).json()["reservations"]) == 1)
+    check("upgrade pair bookable after import", "t_2" not in slot_tables("r_anker", DATE, 4, "19:00"))
+
+
 def main():
+    stage1_url = sys.argv[2].rstrip("/") if len(sys.argv) > 2 else None
     test_health_and_routing()
     test_reset_and_auth()
     test_restaurants_and_availability()
@@ -595,6 +736,11 @@ def main():
     test_moves()
     test_export_import()
     test_concurrency()
+    test_stage2_api()
+    if stage1_url:
+        test_stage1_upgrade(stage1_url)
+    else:
+        print("note: no stage-1 URL given; upgrade import check skipped")
     print(f"\n{PASSES} checks passed, {len(FAILURES)} failed")
     sys.exit(1 if FAILURES else 0)
 
