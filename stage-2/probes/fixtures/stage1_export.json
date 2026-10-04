@@ -1,0 +1,194 @@
+{
+"track": "tablekeeper",
+"format_version": 1,
+"state": {
+"users": [
+{
+"id": "u_hana",
+"email": "hana@probe.test",
+"display_name": "Hana",
+"password_hash": "$2a$10$t/oNLbJwzBWmL2uw1FrXmOKGqiddlzzyF7SGuDebp0a1JJfQCRdge"
+},
+{
+"id": "u_ravi",
+"email": "ravi@probe.test",
+"display_name": "Ravi",
+"password_hash": "$2a$10$mOUZsTUl3M3r18vr6j3C5eIVKLODyvytYpJoKWcL0RlqwWQxtlP/y"
+},
+{
+"id": "u_88bfbf5a439c33c2",
+"email": "nova@probe.test",
+"display_name": "Nova",
+"password_hash": "$2a$10$7wpCOSDJj39Cpqf8A.orVeHEkIENytPgmMqwEQGN7vH..VpuV48i6"
+}
+],
+"tokens": [
+{
+"token": "bacb75fe886e0197dad2a1a784de614753032583f6ac2f59feef6a7ee5d14652",
+"user_id": "u_hana"
+},
+{
+"token": "8cd51180a392f4cf88d9fd7c91241140cd1081dca94e754e7ed2420a843fa0e0",
+"user_id": "u_88bfbf5a439c33c2"
+}
+],
+"restaurants": [
+{
+"id": "r_combo",
+"name": "Combo House",
+"timezone": "Europe/Berlin",
+"slot_minutes": 30,
+"reservation_duration_minutes": 90,
+"cancellation_cutoff_minutes": 120,
+"opening_hours": [
+{
+"weekday": "thu",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "fri",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sat",
+"opens": "18:00",
+"closes": "23:00"
+},
+{
+"weekday": "sun",
+"opens": "18:00",
+"closes": "23:00"
+}
+],
+"tables": [
+{
+"id": "c_a",
+"label": "Alcove",
+"capacity": 2
+},
+{
+"id": "c_b",
+"label": "Bay",
+"capacity": 2
+},
+{
+"id": "c_c",
+"label": "Corner",
+"capacity": 4
+},
+{
+"id": "c_d",
+"label": "Den",
+"capacity": 6
+}
+]
+}
+],
+"reservations": [
+{
+"id": "res_seed_up",
+"reference": "UPSEED",
+"user_id": "u_hana",
+"restaurant_id": "r_combo",
+"table_id": "c_d",
+"party_size": 5,
+"status": "confirmed",
+"starts_at_local": "2027-05-06T21:30",
+"starts_at": "2027-05-06T21:30:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+},
+{
+"id": "res_e4bdee45d7cdbf64",
+"reference": "3B6VP899",
+"user_id": "u_hana",
+"restaurant_id": "r_combo",
+"table_id": "c_c",
+"party_size": 3,
+"status": "confirmed",
+"starts_at_local": "2027-05-06T19:00",
+"starts_at": "2027-05-06T19:00:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+},
+{
+"id": "res_e5678f6cc3c15391",
+"reference": "SN7U2UXM",
+"user_id": "u_hana",
+"restaurant_id": "r_combo",
+"table_id": "c_a",
+"party_size": 2,
+"status": "cancelled",
+"starts_at_local": "2027-05-06T20:30",
+"starts_at": "2027-05-06T20:30:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+}
+],
+"idempotency": [
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservation-moves",
+"key": "up-km-fda7746ef7f04f7ab135f77dc067b08c",
+"body": "{\"moves\":[{\"party_size\":3,\"reference\":\"3B6VP899\"}]}",
+"status": 201,
+"response": {
+"reservations": [
+{
+"reservation_id": "res_e4bdee45d7cdbf64",
+"reference": "3B6VP899",
+"restaurant_id": "r_combo",
+"table_id": "c_c",
+"party_size": 3,
+"status": "confirmed",
+"starts_at_local": "2027-05-06T19:00",
+"starts_at": "2027-05-06T19:00:00+02:00",
+"ends_at": "2027-05-06T20:30:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+}
+]
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservations",
+"key": "up-k1-9f91065843c140318f143cdb725b71e1",
+"body": "{\"party_size\":4,\"restaurant_id\":\"r_combo\",\"starts_at_local\":\"2027-05-06T19:00\",\"table_id\":\"c_c\"}",
+"status": 201,
+"response": {
+"reservation_id": "res_e4bdee45d7cdbf64",
+"reference": "3B6VP899",
+"restaurant_id": "r_combo",
+"table_id": "c_c",
+"party_size": 4,
+"status": "confirmed",
+"starts_at_local": "2027-05-06T19:00",
+"starts_at": "2027-05-06T19:00:00+02:00",
+"ends_at": "2027-05-06T20:30:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+}
+},
+{
+"user_id": "u_hana",
+"method": "POST",
+"path": "/reservations",
+"key": "up-k2-99aaa59d45b74d75955eec9d7d667b18",
+"body": "{\"party_size\":2,\"restaurant_id\":\"r_combo\",\"starts_at_local\":\"2027-05-06T20:30\",\"table_id\":\"c_a\"}",
+"status": 201,
+"response": {
+"reservation_id": "res_e5678f6cc3c15391",
+"reference": "SN7U2UXM",
+"restaurant_id": "r_combo",
+"table_id": "c_a",
+"party_size": 2,
+"status": "confirmed",
+"starts_at_local": "2027-05-06T20:30",
+"starts_at": "2027-05-06T20:30:00+02:00",
+"ends_at": "2027-05-06T22:00:00+02:00",
+"created_at": "2026-10-04T01:47:42+00:00"
+}
+}
+]
+}
+}

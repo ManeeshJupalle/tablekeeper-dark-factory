@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Tablekeeper stage 1 - black-box contract probes (auditor seat).
+"""Tablekeeper stage 2 - black-box HTTP contract probes (auditor seat).
+
+Stage-1 groups are kept in full; stage-2 groups (CFX, CAV, CRS, CID, CPT, CMV, CCN, UPG)
+follow. Browser probes live in run_browser_probes.py.
 
 Usage:
     python3 run_probes.py [--base-url http://127.0.0.1:8080] [--only GROUP,GROUP]
@@ -35,7 +38,7 @@ TS_VIOLATIONS = []
 RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?[+-]\d{2}:\d{2}$")
 LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 REF_RE = re.compile(r"^[A-Z0-9]{6,12}$")
-RES_KEYS = {"reservation_id", "reference", "restaurant_id", "table_id", "party_size",
+RES_KEYS = {"reservation_id", "reference", "restaurant_id", "table_ids", "party_size",
             "status", "starts_at_local", "starts_at", "ends_at", "created_at"}
 
 
@@ -361,10 +364,19 @@ def res_problems(r, duration=90, **expected):
     if missing:
         p.append("missing fields %s" % sorted(missing))
         return p
-    for k in ("reservation_id", "reference", "restaurant_id", "table_id", "status",
+    for k in ("reservation_id", "reference", "restaurant_id", "status",
               "starts_at_local", "starts_at", "ends_at", "created_at"):
         if not isinstance(r[k], str):
             p.append("%s is not a string" % k)
+    tids = r.get("table_ids")
+    if not isinstance(tids, list) or not tids or not all(isinstance(x, str) and x for x in tids) \
+            or len(set(tids)) != len(tids):
+        p.append("table_ids %r is not a non-empty list of distinct strings" % (tids,))
+    elif len(tids) == 1:
+        if r.get("table_id") != tids[0]:
+            p.append("table_id %r should equal the single table_ids member %r" % (r.get("table_id"), tids[0]))
+    elif "table_id" in r:
+        p.append("table_id present on a multi-table reservation")
     if p:
         return p
     if not isinstance(r["party_size"], int) or isinstance(r["party_size"], bool):
@@ -405,6 +417,85 @@ def check_res(cid, desc, resp, want=201, duration=90, **expected):
 
 def same_json(a, b):
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+# --------------------------------------------------------------------------- stage-2 fixtures
+
+COMBO_PAIRS = [["c_b", "c_a"], ["c_b", "c_c"]]
+COMBO_LABELS = {"c_a": "Alcove", "c_b": "Bay", "c_c": "Corner", "c_d": "Den"}
+
+
+def combo_restaurant(combinable=COMBO_PAIRS):
+    r = {"id": "r_combo", "name": "Combo House", "timezone": "Europe/Berlin", "slot_minutes": 30,
+         "reservation_duration_minutes": 90, "cancellation_cutoff_minutes": 120,
+         "opening_hours": hours(["thu", "fri", "sat", "sun"], "18:00", "23:00"),
+         "tables": [{"id": "c_a", "label": "Alcove", "capacity": 2}, {"id": "c_b", "label": "Bay", "capacity": 2},
+                    {"id": "c_c", "label": "Corner", "capacity": 4}, {"id": "c_d", "label": "Den", "capacity": 6}]}
+    if combinable is not None:
+        r["combinable"] = combinable
+    return r
+
+
+def s2_fixture(reservations=None, combinable=COMBO_PAIRS):
+    fx = base_fixture(reservations)
+    fx["restaurants"].append(combo_restaurant(combinable))
+    return fx
+
+
+def book2(token, rest, table_ids, local, party, key=None, extra=None, **kw):
+    body = {"restaurant_id": rest, "table_ids": table_ids, "starts_at_local": local, "party_size": party}
+    if extra:
+        body.update(extra)
+    return call("POST", "/reservations", body=body, token=token,
+                key=key if key is not None else newkey(), **kw)
+
+
+def must_book2(token, rest, table_ids, local, party, key=None):
+    r = book2(token, rest, table_ids, local, party, key=key)
+    if r.status != 201:
+        raise RuntimeError("setup pair booking failed: %r" % r)
+    return r.json
+
+
+def options_at(resp, local):
+    for s in resp.json.get("slots", []):
+        if s.get("starts_at_local") == local:
+            return s.get("available_options")
+    return None
+
+
+def opt_ids(resp, local):
+    o = options_at(resp, local)
+    return None if o is None else [tuple(x.get("table_ids", [])) for x in o]
+
+
+def singles_at(resp, local):
+    return slot_map(resp).get(local)
+
+
+def overlap_violations(reservations):
+    """Pairs of confirmed reservations sharing a table over overlapping intervals."""
+    conf = [r for r in reservations if r.get("status") == "confirmed"]
+    bad = []
+    for i in range(len(conf)):
+        for j in range(i + 1, len(conf)):
+            a, b = conf[i], conf[j]
+            if a["restaurant_id"] != b["restaurant_id"] or not set(a.get("table_ids", [])) & set(b.get("table_ids", [])):
+                continue
+            if parse_ts(a["starts_at"]) < parse_ts(b["ends_at"]) and parse_ts(b["starts_at"]) < parse_ts(a["ends_at"]):
+                bad.append((a["reference"], b["reference"]))
+    return bad
+
+
+def s1_equiv(orig, got):
+    """A stage-2 rendering of a stage-1 response: identical, or identical plus table_ids == [table_id]."""
+    if same_json(orig, got):
+        return True
+    if not isinstance(got, dict) or not isinstance(orig, dict):
+        return False
+    g = dict(got)
+    tids = g.pop("table_ids", None)
+    return same_json(orig, g) and tids == [orig.get("table_id")]
 
 
 # =========================================================================== groups
@@ -1251,6 +1342,399 @@ def g_roundtrip():
           "token=%r login=%r restaurants=%r" % (r1, r2, r3))
 
 
+@group("CFX")
+def g_combo_fixture():
+    reset(base_fixture())
+    r = call("POST", "/_test/reset", body=s2_fixture(), timeout=10)
+    check("CFX-1a", "fixture with combinable pairs is accepted (204)", r.status == 204, repr(r))
+    a = avail("r_combo", THU, 1)
+    check("CFX-1b", "every slot carries available_options (list)",
+          a.status == 200 and len(a.json["slots"]) == 8 and all(isinstance(s.get("available_options"), list) for s in a.json["slots"]), repr(a)[:300])
+    a = avail("r_lumen", THU, 1)
+    check("CFX-1c", "restaurant without combinable lists singles only in available_options, matching available_table_ids",
+          a.status == 200 and all([o.get("table_ids") for o in s.get("available_options", [])] == [[t] for t in s["available_table_ids"]]
+                                   for s in a.json["slots"]), repr(a)[:300])
+    r = call("POST", "/_test/reset", body=base_fixture(), timeout=10)
+    check("CFX-1d", "stage-1-shaped fixture (no combinable anywhere) is still accepted", r.status == 204, repr(r))
+
+    reset(s2_fixture())
+    tok = login("hana")
+    X = must_book(tok, "r_combo", "c_d", T(THU, "19:00"), 4)
+    bad = [("triple", [["c_a", "c_b", "c_c"]]), ("singleton", [["c_a"]]), ("unknown id", [["c_a", "c_zz"]]),
+           ("duplicate", [["c_a", "c_a"]]), ("other restaurant's table", [["c_a", "t_duo"]]), ("not a list", ["c_a", "c_b"])]
+    for label, comb in bad:
+        r = call("POST", "/_test/reset", body=s2_fixture(combinable=comb), timeout=10)
+        expect_err("CFX-2[%s]" % label, "combinable %s is rejected 422 validation_failed" % label, r, 422, "validation_failed")
+    g = get_res(tok, X["reference"])
+    check("CFX-2b", "state unchanged after rejected fixtures (token valid, booking present)", g.status == 200 and same_json(g.json, X), repr(g))
+
+    seeds = [{"id": "res_pair", "reference": "PAIRSD", "user_id": "u_hana", "restaurant_id": "r_combo",
+              "table_ids": ["c_b", "c_a"], "starts_at_local": T(THU, "19:00"), "party_size": 4},
+             {"id": "res_single", "reference": "SINGSD", "user_id": "u_hana", "restaurant_id": "r_combo",
+              "table_id": "c_d", "starts_at_local": T(THU, "19:00"), "party_size": 5},
+             {"id": "res_canc", "reference": "CANCSD", "user_id": "u_hana", "restaurant_id": "r_combo",
+              "table_id": "c_c", "starts_at_local": T(THU, "19:00"), "party_size": 2, "status": "cancelled"}]
+    r = call("POST", "/_test/reset", body=s2_fixture(seeds), timeout=10)
+    check("CFX-3a", "fixture with table_ids / table_id / cancelled seeds is accepted", r.status == 204, repr(r))
+    tok = login("hana")
+    g = get_res(tok, "PAIRSD")
+    check_res("CFX-3", "seeded pair reservation visible with table_ids and no table_id", g, 200, reservation_id="res_pair",
+              party_size=4, status="confirmed", starts_at_local=T(THU, "19:00"))
+    check("CFX-3b", "seeded pair table_ids is the seeded set", g.status == 200 and set(g.json.get("table_ids", [])) == {"c_a", "c_b"} and "table_id" not in g.json, repr(g))
+    g = get_res(tok, "SINGSD")
+    check_res("CFX-4", "seeded table_id reservation visible with table_ids [c_d] and table_id c_d", g, 200, table_ids=["c_d"], table_id="c_d", party_size=5)
+    g = get_res(tok, "CANCSD")
+    check_res("CFX-5", "seeded cancelled reservation visible as cancelled", g, 200, status="cancelled", table_ids=["c_c"])
+    a = avail("r_combo", THU, 1)
+    check("CFX-3c", "seeded pair and single block their tables; cancelled seed does not block",
+          a.status == 200 and singles_at(a, T(THU, "19:00")) == ["c_c"] and opt_ids(a, T(THU, "19:00")) == [("c_c",)]
+          and singles_at(a, T(THU, "20:30")) == ["c_a", "c_b", "c_c", "c_d"]
+          and opt_ids(a, T(THU, "20:30")) == [("c_a",), ("c_b",), ("c_c",), ("c_d",), ("c_b", "c_a"), ("c_b", "c_c")], repr(a)[:400])
+    r = call("GET", "/restaurants/r_combo")
+    fr = combo_restaurant()
+    check("CFX-6", "GET /restaurants/r_combo returns the stage-1 fields equal to the fixture",
+          r.status == 200 and all(r.json.get(k) == fr[k] for k in ("id", "name", "timezone", "slot_minutes", "reservation_duration_minutes",
+                                                                  "cancellation_cutoff_minutes", "opening_hours", "tables")), repr(r)[:300])
+
+
+@group("CAV")
+def g_combo_availability():
+    reset(s2_fixture())
+    tok = login("hana")
+    L = T(THU, "19:00")
+    a4 = avail("r_combo", THU, 4)
+    check("CAV-1", "available_table_ids lists singles only (party 4: c_c, c_d)", a4.status == 200 and singles_at(a4, L) == ["c_c", "c_d"], repr(a4)[:300])
+    exp = [{"table_ids": ["c_c"], "capacity": 4}, {"table_ids": ["c_d"], "capacity": 6},
+           {"table_ids": ["c_b", "c_a"], "capacity": 4}, {"table_ids": ["c_b", "c_c"], "capacity": 6}]
+    check("CAV-2", "options: singles in fixture order, then pairs in combinable order with combinable-ordered table_ids",
+          a4.status == 200 and same_json(options_at(a4, L), exp), repr(options_at(a4, L)))
+    check("CAV-3a", "capacity is the sum for pairs (party 4 exact options on every slot)",
+          a4.status == 200 and all(same_json(options_at(a4, s["starts_at_local"]), exp) for s in a4.json["slots"]), "")
+    a5 = avail("r_combo", THU, 5)
+    check("CAV-3b", "party 5 offers [c_d 6, c_b+c_c 6]", a5.status == 200 and same_json(options_at(a5, L), [{"table_ids": ["c_d"], "capacity": 6}, {"table_ids": ["c_b", "c_c"], "capacity": 6}]), repr(options_at(a5, L)))
+    a7 = avail("r_combo", THU, 7)
+    check("CAV-3c", "party 7 keeps all 8 slots with available_options [] and available_table_ids []",
+          a7.status == 200 and len(a7.json["slots"]) == 8 and all(s.get("available_options") == [] and s["available_table_ids"] == [] for s in a7.json["slots"]), repr(a7)[:300])
+    a1 = avail("r_combo", THU, 1)
+    check("CAV-6", "party 1 lists all singles and exactly the two declared pairs (no transitive c_a+c_c)",
+          a1.status == 200 and opt_ids(a1, L) == [("c_a",), ("c_b",), ("c_c",), ("c_d",), ("c_b", "c_a"), ("c_b", "c_c")], repr(opt_ids(a1, L)))
+    check("CAV-8", "available_options present on every slot", a1.status == 200 and all(isinstance(s.get("available_options"), list) for s in a1.json["slots"]), "")
+    must_book(tok, "r_combo", "c_a", L, 2)
+    a1 = avail("r_combo", THU, 1)
+    check("CAV-4", "single booking on c_a removes c_a and pair c_b+c_a but keeps c_b+c_c",
+          singles_at(a1, L) == ["c_b", "c_c", "c_d"] and opt_ids(a1, L) == [("c_b",), ("c_c",), ("c_d",), ("c_b", "c_c")], repr(opt_ids(a1, L)))
+    must_book2(tok, "r_combo", ["c_b", "c_c"], T(THU, "20:30"), 6)
+    a1 = avail("r_combo", THU, 1)
+    check("CAV-5", "pair booking c_b+c_c at 20:30 blocks c_b, c_c and both pairs at 20:30 and 19:30, not at 19:00 (half-open)",
+          singles_at(a1, T(THU, "20:30")) == ["c_a", "c_d"] and opt_ids(a1, T(THU, "20:30")) == [("c_a",), ("c_d",)]
+          and singles_at(a1, T(THU, "19:30")) == ["c_d"] and opt_ids(a1, T(THU, "19:30")) == [("c_d",)]
+          and singles_at(a1, L) == ["c_b", "c_c", "c_d"], repr(slot_map(a1)))
+    must_book(tok, "r_combo", "c_d", T(THU, "18:00"), 5)
+    a5 = avail("r_combo", THU, 5)
+    check("CAV-7", "party 5 with c_d taken sees exactly the pair c_b+c_c (no single fits)", a5.status == 200 and opt_ids(a5, T(THU, "18:00")) == [("c_b", "c_c")] and singles_at(a5, T(THU, "18:00")) == [], repr(options_at(a5, T(THU, "18:00"))))
+
+
+@group("CRS")
+def g_combo_create():
+    reset(s2_fixture())
+    tok = login("hana")
+    ravi = login("ravi")
+    L = T(THU, "19:00")
+    r = book2(tok, "r_combo", ["c_b", "c_a"], L, 4)
+    check_res("CRS-1", "pair booking is 201 with table_ids pair and no table_id", r, 201, restaurant_id="r_combo", party_size=4, status="confirmed")
+    check("CRS-1b", "pair booking table_ids is the requested set", r.status == 201 and set(r.json.get("table_ids", [])) == {"c_a", "c_b"} and len(r.json["table_ids"]) == 2 and "table_id" not in r.json, repr(r))
+    pairA = r.json if r.status == 201 else {}
+    r = book(tok, "r_combo", "c_c", L, 4)
+    check_res("CRS-2a", "legacy table_id booking is 201 with table_ids [c_c] and table_id c_c", r, 201, table_ids=["c_c"], table_id="c_c")
+    legacy = r.json if r.status == 201 else {}
+    r = book2(tok, "r_combo", ["c_d"], L, 5)
+    check_res("CRS-2b", "one-element table_ids is 201 with table_id present", r, 201, table_ids=["c_d"], table_id="c_d")
+    body = {"restaurant_id": "r_combo", "table_id": "c_a", "table_ids": ["c_a"], "starts_at_local": T(THU, "20:30"), "party_size": 2}
+    expect_err("CRS-3a", "both table_id and table_ids (agreeing) is 422 validation_failed", call("POST", "/reservations", body=body, token=tok, key=newkey()), 422, "validation_failed")
+    body["table_ids"] = ["c_b", "c_a"]
+    expect_err("CRS-3b", "both table_id and table_ids (pair) is 422 validation_failed", call("POST", "/reservations", body=body, token=tok, key=newkey()), 422, "validation_failed")
+    expect_err("CRS-4a", "duplicate id in table_ids is 422 validation_failed", book2(tok, "r_combo", ["c_a", "c_a"], T(THU, "20:30"), 2), 422, "validation_failed")
+    expect_err("CRS-4b", "empty table_ids is 422 validation_failed", book2(tok, "r_combo", [], T(THU, "20:30"), 2), 422, "validation_failed")
+    expect_err("CRS-5", "three ids are 422 combination_not_allowed", book2(tok, "r_combo", ["c_a", "c_b", "c_c"], T(THU, "20:30"), 2), 422, "combination_not_allowed")
+    for pair in (["c_a", "c_c"], ["c_a", "c_d"], ["c_c", "c_d"]):
+        expect_err("CRS-6[%s]" % "+".join(pair), "unlisted pair %s is 422 combination_not_allowed" % pair, book2(tok, "r_combo", pair, T(THU, "20:30"), 2), 422, "combination_not_allowed")
+    expect_err("CRS-7a", "party 5 on pair c_b+c_a (sum 4) is 422 party_exceeds_capacity", book2(tok, "r_combo", ["c_b", "c_a"], T(THU, "20:30"), 5), 422, "party_exceeds_capacity")
+    r = book2(tok, "r_combo", ["c_a", "c_b"], T(THU, "20:30"), 4)
+    check_res("CRS-7b", "party equal to the summed capacity is 201 (ids given in the other order)", r, 201, party_size=4)
+    if r.status == 201:
+        cancel(tok, r.json["reference"])
+    expect_err("CRS-8a", "single on a member of a booked pair is 409 table_unavailable", book(ravi, "r_combo", "c_a", L, 2), 409, "table_unavailable")
+    expect_err("CRS-8b", "pair overlapping a booked pair's member is 409 table_unavailable", book2(ravi, "r_combo", ["c_b", "c_c"], L, 2), 409, "table_unavailable")
+    expect_err("CRS-8c", "single on a legacy-booked table is 409 table_unavailable", book(ravi, "r_combo", "c_c", L, 2), 409, "table_unavailable")
+    P = must_book2(tok, "r_combo", ["c_b", "c_c"], T(THU, "21:30"), 6)
+    expect_err("CRS-8d", "single c_c against pair c_b+c_c is 409 table_unavailable", book(ravi, "r_combo", "c_c", T(THU, "21:30"), 2), 409, "table_unavailable")
+    expect_err("CRS-8e", "single c_b against pair c_b+c_c is 409 table_unavailable", book(ravi, "r_combo", "c_b", T(THU, "21:30"), 2), 409, "table_unavailable")
+    expect_err("CRS-8f", "pair c_b+c_a against pair c_b+c_c is 409 table_unavailable", book2(ravi, "r_combo", ["c_b", "c_a"], T(THU, "21:30"), 2), 409, "table_unavailable")
+    check_res("CRS-8g", "single c_a next to pair c_b+c_c is 201", book(ravi, "r_combo", "c_a", T(THU, "21:30"), 2), 201, table_id="c_a")
+    body = {"restaurant_id": "r_combo", "table_ids": "c_a", "starts_at_local": T(THU, "20:30"), "party_size": 2}
+    expect_err("CRS-9", "table_ids as a string is 400 malformed_request", call("POST", "/reservations", body=body, token=tok, key=newkey()), 400, "malformed_request")
+    lst = list_res(tok)
+    probs = []
+    for x in lst:
+        probs += res_problems(x)
+    pair_entries = [x for x in lst if len(x.get("table_ids", [])) == 2]
+    check("CRS-10a", "list entries all carry table_ids and table_id only for singles (3 pair entries incl. the cancelled one)",
+          not probs and len(pair_entries) == 3 and all("table_id" not in x for x in pair_entries), "; ".join(probs) + " pairs=%d" % len(pair_entries))
+    g = get_res(tok, pairA.get("reference", "XXXXXX"))
+    check("CRS-10b", "GET of a pair booking equals the 201 body", g.status == 200 and same_json(g.json, pairA), repr(g))
+    c = cancel(tok, pairA.get("reference", "XXXXXX"))
+    check_res("CRS-10c", "cancel response of a pair booking carries table_ids and no table_id", c, 200, status="cancelled")
+    check("CRS-10d", "cancelled pair keeps its table_ids", c.status == 200 and set(c.json.get("table_ids", [])) == {"c_a", "c_b"} and "table_id" not in c.json, repr(c))
+    p = patch(tok, legacy.get("reference", "XXXXXX"), {"party_size": 3})
+    check_res("CRS-10e", "PATCH response of a single carries table_ids [c_c] and table_id", p, 200, table_ids=["c_c"], table_id="c_c", party_size=3)
+    m = moves(tok, [{"reference": P["reference"], "party_size": 5}])
+    check("CRS-10f", "moves entry of a pair booking carries table_ids and no table_id",
+          m.status == 201 and set(m.json["reservations"][0].get("table_ids", [])) == {"c_b", "c_c"} and "table_id" not in m.json["reservations"][0]
+          and not res_problems(m.json["reservations"][0]), repr(m))
+    a = avail("r_combo", THU, 1)
+    check("CRS-11", "cancelling the pair frees both members: c_a, c_b and pair c_b+c_a offered again at 19:00",
+          singles_at(a, L) == ["c_a", "c_b"] and opt_ids(a, L) == [("c_a",), ("c_b",), ("c_b", "c_a")], repr(opt_ids(a, L)))
+    r = book2(tok, "r_combo", ["c_b", "c_a"], T(THU, "18:00"), 4)
+    r2 = book2(tok, "r_combo", ["c_b", "c_a"], T(THU, "19:30"), 4)
+    check("CRS-12", "pair at 18:00 (90 min) does not block the pair at 19:30 (half-open)", r.status == 201 and r2.status == 201, "%r %r" % (r, r2))
+
+
+@group("CID")
+def g_combo_idempotency():
+    reset(s2_fixture())
+    tok = login("hana")
+    L = T(THU, "19:00")
+    body = {"restaurant_id": "r_combo", "table_ids": ["c_b", "c_a"], "starts_at_local": L, "party_size": 4}
+    key = newkey()
+    first = call("POST", "/reservations", body=body, token=tok, key=key)
+    rep = call("POST", "/reservations", body=body, token=tok, key=key)
+    check("CID-1", "replay of a pair booking is 200 identical and one reservation exists",
+          first.status == 201 and rep.status == 200 and same_json(rep.json, first.json) and len(list_res(tok)) == 1, "first=%r replay=%r" % (first, rep))
+    expect_err("CID-2", "same key with a different pair is 409 idempotency_key_reuse",
+               call("POST", "/reservations", body=dict(body, table_ids=["c_b", "c_c"]), token=tok, key=key), 409, "idempotency_key_reuse")
+    k3 = newkey()
+    b3 = {"restaurant_id": "r_combo", "table_id": "c_d", "starts_at_local": T(THU, "20:30"), "party_size": 2}
+    r = call("POST", "/reservations", body=b3, token=tok, key=k3)
+    b3b = {"restaurant_id": "r_combo", "table_ids": ["c_d"], "starts_at_local": T(THU, "20:30"), "party_size": 2}
+    r2 = call("POST", "/reservations", body=b3b, token=tok, key=k3)
+    check("CID-3", "table_id vs one-element table_ids are different bodies: same key is 409 idempotency_key_reuse",
+          r.status == 201 and r2.status == 409 and r2.code == "idempotency_key_reuse", "first=%r second=%r" % (r, r2))
+    c = cancel(tok, first.json["reference"])
+    rep = call("POST", "/reservations", body=body, token=tok, key=key)
+    check("CID-4", "replay after cancelling the pair booking returns the original confirmed body",
+          c.status == 200 and rep.status == 200 and same_json(rep.json, first.json), "cancel=%r replay=%r" % (c, rep))
+    kf = newkey()
+    r = book2(tok, "r_combo", ["c_a", "c_c"], T(THU, "21:30"), 2, key=kf)
+    r2 = book2(tok, "r_combo", ["c_b", "c_c"], T(THU, "21:30"), 2, key=kf)
+    check("CID-5", "key that failed with combination_not_allowed is a first use next time (201)",
+          r.status == 422 and r.code == "combination_not_allowed" and r2.status == 201, "first=%r second=%r" % (r, r2))
+
+
+@group("CPT")
+def g_combo_patch():
+    reset(s2_fixture())
+    tok = login("hana")
+    ravi = login("ravi")
+    L = T(THU, "19:00")
+    A = must_book(tok, "r_combo", "c_d", L, 4)
+    ref = A["reference"]
+    r = patch(tok, ref, {"table_ids": ["c_b", "c_a"]})
+    check_res("CPT-1", "PATCH single -> pair is 200 with the pair and no table_id", r, 200, reference=ref, party_size=4)
+    check("CPT-1b", "PATCHed pair is the requested set", r.status == 200 and set(r.json.get("table_ids", [])) == {"c_a", "c_b"} and "table_id" not in r.json, repr(r))
+    a = avail("r_combo", THU, 1)
+    check("CPT-1c", "old table freed and both members taken", singles_at(a, L) == ["c_c", "c_d"], repr(singles_at(a, L)))
+    r = patch(tok, ref, {"table_id": "c_d"})
+    check_res("CPT-2a", "PATCH back to a single via table_id", r, 200, table_ids=["c_d"], table_id="c_d")
+    r = patch(tok, ref, {"table_ids": ["c_c"]})
+    check_res("CPT-2b", "PATCH to a single via one-element table_ids yields table_id", r, 200, table_ids=["c_c"], table_id="c_c")
+    expect_err("CPT-3", "PATCH with both table_id and table_ids is 422 validation_failed", patch(tok, ref, {"table_id": "c_d", "table_ids": ["c_d"]}), 422, "validation_failed")
+    expect_err("CPT-4a", "PATCH to an unlisted pair is 422 combination_not_allowed", patch(tok, ref, {"table_ids": ["c_a", "c_c"]}), 422, "combination_not_allowed")
+    expect_err("CPT-4b", "PATCH to three tables is 422 combination_not_allowed", patch(tok, ref, {"table_ids": ["c_a", "c_b", "c_c"]}), 422, "combination_not_allowed")
+    before = get_res(tok, ref).json
+    B = must_book(ravi, "r_combo", "c_a", L, 2)
+    expect_err("CPT-5", "PATCH to a pair with a taken member is 409 table_unavailable", patch(tok, ref, {"table_ids": ["c_b", "c_a"]}), 409, "table_unavailable")
+    check("CPT-5b", "booking unchanged after the 409", same_json(get_res(tok, ref).json, before), "")
+    expect_err("CPT-6", "PATCH party above the pair's sum is 422 party_exceeds_capacity", patch(tok, ref, {"table_ids": ["c_b", "c_c"], "party_size": 7}), 422, "party_exceeds_capacity")
+    cancel(ravi, B["reference"])
+    r = patch(tok, ref, {"table_ids": ["c_b", "c_a"]})
+    r2 = patch(tok, ref, {"table_ids": ["c_b", "c_c"]})
+    check("CPT-7", "own occupancy does not block moving from c_b+c_a to c_b+c_c at the same slot",
+          r.status == 200 and r2.status == 200 and set(r2.json.get("table_ids", [])) == {"c_b", "c_c"}, "%r %r" % (r, r2))
+    r = patch(tok, ref, {"starts_at_local": T(THU, "21:30")})
+    a = avail("r_combo", THU, 1)
+    check("CPT-8", "moving the pair to 21:30 frees both members at 19:00 and takes them at 21:30",
+          r.status == 200 and singles_at(a, L) == ["c_a", "c_b", "c_c", "c_d"] and singles_at(a, T(THU, "21:30")) == ["c_a", "c_d"], repr(slot_map(a)))
+
+
+@group("CMV")
+def g_combo_moves():
+    reset(s2_fixture())
+    tok = login("hana")
+    L = T(THU, "19:00")
+    A = must_book2(tok, "r_combo", ["c_b", "c_a"], L, 4)
+    B = must_book(tok, "r_combo", "c_c", L, 2)
+    rA, rB = A["reference"], B["reference"]
+    expect_err("CMV-5", "item with both table_id and table_ids is 422 validation_failed",
+               moves(tok, [{"reference": rA, "table_id": "c_d", "table_ids": ["c_d"]}]), 422, "validation_failed")
+    expect_err("CMV-4", "unlisted pair in a move is 422 combination_not_allowed", moves(tok, [{"reference": rA, "table_ids": ["c_a", "c_c"]}]), 422, "combination_not_allowed")
+    expect_err("CMV-3", "overlap among resulting bookings through shared member c_c is 409 table_unavailable",
+               moves(tok, [{"reference": rA, "table_ids": ["c_b", "c_c"]}, {"reference": rB, "party_size": 3}]), 409, "table_unavailable")
+    check("CMV-3b", "nothing changed after the refused batches", same_json(get_res(tok, rA).json, A) and same_json(get_res(tok, rB).json, B), "")
+    kswap = newkey()
+    swap_body = [{"reference": rA, "table_ids": ["c_b", "c_c"]}, {"reference": rB, "table_id": "c_a"}]
+    swap = moves(tok, swap_body, key=kswap)
+    ok = swap.status == 201 and [x.get("reference") for x in swap.json.get("reservations", [])] == [rA, rB]
+    ok = ok and set(swap.json["reservations"][0].get("table_ids", [])) == {"c_b", "c_c"} and "table_id" not in swap.json["reservations"][0]
+    ok = ok and swap.json["reservations"][1].get("table_ids") == ["c_a"] and swap.json["reservations"][1].get("table_id") == "c_a"
+    ok = ok and set(get_res(tok, rA).json.get("table_ids", [])) == {"c_b", "c_c"} and get_res(tok, rB).json.get("table_ids") == ["c_a"]
+    check("CMV-2", "swap involving a pair (A -> c_b+c_c, B -> c_a) is 201 in input order", ok, repr(swap))
+    r = moves(tok, [{"reference": rB, "table_ids": ["c_d"]}])
+    r2 = moves(tok, [{"reference": rA, "table_ids": ["c_b", "c_a"]}])
+    check("CMV-1", "move items with table_ids are 201 and carry the sets",
+          r.status == 201 and r.json["reservations"][0].get("table_ids") == ["c_d"] and r.json["reservations"][0].get("table_id") == "c_d"
+          and r2.status == 201 and set(r2.json["reservations"][0].get("table_ids", [])) == {"c_a", "c_b"}, "%r %r" % (r, r2))
+    U = must_book2(tok, "r_combo", ["c_b", "c_c"], T(THU, "20:30"), 6)
+    before = get_res(tok, rA).json
+    expect_err("CMV-7", "moving the pair onto a slot where an unlisted pair booking holds c_b is 409 table_unavailable",
+               moves(tok, [{"reference": rA, "starts_at_local": T(THU, "20:30")}]), 409, "table_unavailable")
+    check("CMV-7b", "nothing changed", same_json(get_res(tok, rA).json, before), "")
+    rep = moves(tok, swap_body, key=kswap)
+    check("CMV-6", "replay of the pair swap batch is 200 with the original body", rep.status == 200 and same_json(rep.json, swap.json), "orig=%r replay=%r" % (swap, rep))
+
+
+@group("CCN")
+def g_combo_concurrency():
+    reset(s2_fixture())
+    toks = [login("hana"), login("ravi"), login("mira")]
+    L = T(THU, "19:00")
+    N = 24
+    res = parallel([lambda i=i: book2(toks[i % 3], "r_combo", ["c_b", "c_a"], L, 4) for i in range(N)])
+    exc = [x for x in res if isinstance(x, Exception)]
+    oks = [x for x in res if not isinstance(x, Exception)]
+    st = [x.status for x in oks]
+    total = sum(len(list_res(t)) for t in toks)
+    check("CCN-1", "%d distinct-key requests for one pair: exactly one 201, rest 409 table_unavailable, no 5xx, one reservation" % N,
+          not exc and st.count(201) == 1 and sum(1 for x in oks if x.status == 409 and x.code == "table_unavailable") == N - 1 and total == 1,
+          "statuses=%r total=%d exc=%r" % (st, total, exc[:1]))
+
+    reset(s2_fixture())
+    toks = [login("hana"), login("ravi"), login("mira")]
+    sets = [["c_b", "c_a"], ["c_a"], ["c_b"], ["c_b", "c_c"]]
+    res = parallel([lambda i=i: book2(toks[i % 3], "r_combo", sets[i % 4], L, 2) for i in range(N)])
+    exc = [x for x in res if isinstance(x, Exception)]
+    oks = [x for x in res if not isinstance(x, Exception)]
+    st = [x.status for x in oks]
+    allres = [r for t in toks for r in list_res(t)]
+    viol = overlap_violations(allres)
+    check("CCN-2", "%d mixed pair/single requests: no 5xx, >=1 success, refusals 409 table_unavailable, no table double-booked" % N,
+          not exc and st.count(201) >= 1 and all(x.status == 201 or (x.status == 409 and x.code == "table_unavailable") for x in oks) and not viol,
+          "statuses=%r violations=%r" % (st, viol))
+    wins = [x.json for x in oks if x.status == 201]
+    check("CCN-2b", "winning sets are pairwise disjoint and all for the slot",
+          all(x["starts_at_local"] == L for x in wins) and not overlap_violations(wins), repr([x.get("table_ids") for x in wins]))
+
+    reset(s2_fixture())
+    hana, ravi, mira = login("hana"), login("ravi"), login("mira")
+    days = [THU, THU + dt.timedelta(days=1), THU + dt.timedelta(days=2), THU + dt.timedelta(days=3)]
+    pre = []
+    for d in days[1:]:
+        for hh in ("18:00", "19:30", "21:00"):
+            if len(pre) < 8:
+                pre.append(must_book(hana, "r_combo", "c_d", T(d, hh), 2))
+    fns = [lambda p=p: patch(hana, p["reference"], {"table_id": "c_c", "starts_at_local": L}) for p in pre]
+    fns += [lambda: book(ravi, "r_combo", "c_c", L, 2) for _ in range(8)]
+    fns += [lambda: book2(mira, "r_combo", ["c_b", "c_c"], L, 2) for _ in range(4)]
+    res = parallel(fns)
+    exc = [x for x in res if isinstance(x, Exception)]
+    oks = [x for x in res if not isinstance(x, Exception)]
+    succ = [x for x in oks if x.status in (200, 201)]
+    refused = [x for x in oks if x.status == 409 and x.code == "table_unavailable"]
+    allres = [r for t in (hana, ravi, mira) for r in list_res(t)]
+    viol = overlap_violations(allres)
+    check("CCN-3", "20 concurrent PATCHes/bookings/pair bookings onto c_c 19:00: exactly one success, rest 409, no 5xx, no double booking",
+          not exc and len(succ) == 1 and len(refused) == len(oks) - 1 and not viol,
+          "statuses=%r violations=%r" % ([x.status for x in oks], viol))
+    check("CCN-3b", "every pre-existing booking is still confirmed and on c_c 19:00 or its original slot",
+          all(get_res(hana, p["reference"]).json.get("status") == "confirmed" for p in pre), "")
+
+    reset(s2_fixture())
+    tok = login("hana")
+    key = newkey()
+    body = {"restaurant_id": "r_combo", "table_ids": ["c_b", "c_c"], "starts_at_local": L, "party_size": 6}
+    res = parallel([lambda: call("POST", "/reservations", body=body, token=tok, key=key) for _ in range(N)])
+    exc = [x for x in res if isinstance(x, Exception)]
+    oks = [x for x in res if not isinstance(x, Exception)]
+    c201 = [x for x in oks if x.status == 201]
+    c200 = [x for x in oks if x.status == 200]
+    check("CCN-4", "%d identical pair requests with one key: exactly one 201, rest 200 identical, one reservation" % N,
+          not exc and len(c201) == 1 and len(c200) == N - 1 and all(same_json(x.json, c201[0].json) for x in c200) and len(list_res(tok)) == 1,
+          "statuses=%r" % [x.status for x in oks])
+
+
+@group("UPG")
+def g_upgrade():
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "fixtures", "stage1_export.json"), encoding="utf-8") as f:
+        export = json.load(f)
+    with open(os.path.join(here, "fixtures", "stage1_export_expected.json"), encoding="utf-8") as f:
+        exp = json.load(f)
+    thu = exp["thu"]
+    reset(s2_fixture())
+    tokS2 = login("hana")
+    r = call("POST", "/_test/import", body=export, timeout=10)
+    expect_status("UPG-1", "import of the genuine stage-1 export (table_id-only reservations, no combinable) is 204", r, 204)
+    tokH, tokN = exp["token_hana"], exp["token_nova"]
+    lst = call("GET", "/reservations", token=tokH)
+    check("UPG-2a", "stage-1 login token still works", lst.status == 200, repr(lst)[:200])
+    check("UPG-2b", "stage-1 signup token still works", call("GET", "/reservations", token=tokN).status == 200, "")
+    l1 = call("POST", "/auth/login", body={"email": "hana@probe.test", "password": "hana-secret-9"})
+    l2 = call("POST", "/auth/login", body={"email": "nova@probe.test", "password": "nova-secret-9"})
+    check("UPG-2c", "seeded and signed-up stage-1 logins still work with the same user ids",
+          l1.status == 200 and l1.json.get("user_id") == "u_hana" and l2.status == 200 and l2.json.get("user_id") == exp["nova_user_id"], "%r %r" % (l1, l2))
+    expect_err("UPG-2d", "a stage-2 token issued before the import is 401 (import removes previous credentials)", call("GET", "/reservations", token=tokS2), 401, "unauthenticated")
+    got = lst.json.get("reservations") if lst.status == 200 else None
+    ok = isinstance(got, list) and len(got) == len(exp["list"]) and all(s1_equiv(o, g) for o, g in zip(exp["list"], got)) and all(not res_problems(g) for g in got)
+    check("UPG-3", "list equals the stage-1 list (ids, references, statuses, timestamps) with table_ids == [table_id]", ok, "expected=%r got=%r" % (exp["list"], got))
+    g = get_res(tokH, "UPSEED")
+    check("UPG-4a", "seeded stage-1 reservation is found by reference", g.status == 200 and g.json.get("reservation_id") == "res_seed_up" and g.json.get("status") == "confirmed", repr(g))
+    g = get_res(tokH, exp["r1"]["reference"])
+    check("UPG-4b", "created reservation found with the batch-amended party size", g.status == 200 and s1_equiv(exp["m1"]["reservations"][0], g.json), repr(g))
+    g = get_res(tokH, exp["r2_cancelled"]["reference"])
+    check("UPG-4c", "cancelled reservation is still cancelled", g.status == 200 and g.json.get("status") == "cancelled" and s1_equiv(exp["r2_cancelled"], g.json), repr(g))
+    rep = call("POST", "/reservations", body=exp["b1"], token=tokH, key=exp["k1"])
+    check("UPG-5a", "stage-1 replay on /reservations is 200 with the original body (plus table_ids at most)", rep.status == 200 and s1_equiv(exp["r1"], rep.json), "orig=%r got=%r" % (exp["r1"], rep))
+    rep = call("POST", "/reservation-moves", body=exp["mb"], token=tokH, key=exp["km"])
+    ok = rep.status == 200 and isinstance(rep.json, dict) and isinstance(rep.json.get("reservations"), list) \
+        and len(rep.json["reservations"]) == 1 and s1_equiv(exp["m1"]["reservations"][0], rep.json["reservations"][0]) \
+        and set(rep.json) == set(exp["m1"])
+    check("UPG-5b", "stage-1 replay on /reservation-moves is 200 with the original body (plus table_ids at most)", ok, "orig=%r got=%r" % (exp["m1"], rep))
+    r = call("POST", "/reservations", body=dict(exp["bf"], party_size=2), token=tokH, key=exp["kf"])
+    check("UPG-6a", "a stage-1 key that failed is a first use after import (201)", r.status == 201, repr(r))
+    expect_err("UPG-6b", "a stage-1 key with a different body is 409 idempotency_key_reuse", call("POST", "/reservations", body=dict(exp["b1"], party_size=1), token=tokH, key=exp["k1"]), 409, "idempotency_key_reuse")
+    a = avail("r_combo", thu, 1)
+    L = thu + "T19:00"
+    check("UPG-7a", "imported reservations occupy their tables (c_c at 19:00, c_d at 21:30 blocked; cancelled c_a free)",
+          a.status == 200 and "c_c" not in (singles_at(a, L) or ["c_c"]) and "c_a" in (singles_at(a, L) or []) and "c_d" not in (singles_at(a, thu + "T21:30") or ["c_d"])
+          and all(isinstance(s.get("available_options"), list) for s in a.json["slots"]), repr(slot_map(a)))
+    expect_err("UPG-7b", "with no combinable in the imported state a pair booking is 422 combination_not_allowed", book2(tokH, "r_combo", ["c_a", "c_b"], thu + "T20:30", 2), 422, "combination_not_allowed")
+    reset(base_fixture())
+    expect_err("UPG-8", "reset after the upgrade import clears everything (stage-1 token 401)", call("GET", "/reservations", token=tokH), 401, "unauthenticated")
+
+    reset(s2_fixture())
+    tok = login("hana")
+    kp = newkey()
+    body = {"restaurant_id": "r_combo", "table_ids": ["c_b", "c_a"], "starts_at_local": T(THU, "19:00"), "party_size": 4}
+    P = call("POST", "/reservations", body=body, token=tok, key=kp)
+    ex = call("GET", "/_test/export", timeout=10)
+    cancel(tok, P.json["reference"])
+    imp = call("POST", "/_test/import", body=ex.json, timeout=10)
+    g = get_res(tok, P.json["reference"])
+    rep = call("POST", "/reservations", body=body, token=tok, key=kp)
+    check("UPG-9", "stage-2 export/import round-trips a pair booking and its replay",
+          P.status == 201 and ex.status == 200 and imp.status == 204 and g.status == 200 and same_json(g.json, P.json) and rep.status == 200 and same_json(rep.json, P.json),
+          "P=%r imp=%r get=%r replay=%r" % (P, imp, g, rep))
+
+
 @group("CONV")
 def g_conventions():
     check("CONV-1", "every JSON response carried Content-Type application/json", not CT_VIOLATIONS, repr(CT_VIOLATIONS[:5]))
@@ -1269,7 +1753,7 @@ def main():
     args = ap.parse_args()
     BASE = args.base_url.rstrip("/")
     only = {x.strip().upper() for x in args.only.split(",") if x.strip()}
-    print("# tablekeeper stage-1 probes against %s (THU=%s)" % (BASE, THU))
+    print("# tablekeeper stage-2 HTTP probes against %s (THU=%s)" % (BASE, THU))
     for name, fn in GROUPS:
         if only and name not in only and name != "CONV":
             continue

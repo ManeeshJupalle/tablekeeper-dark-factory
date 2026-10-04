@@ -1,4 +1,8 @@
-# Tablekeeper stage 1 - contract checklist (auditor)
+# Tablekeeper stage 2 - contract checklist (auditor)
+
+Part A keeps every stage-1 item (still in force). Part B adds the stage-2 items.
+
+# Part A - stage 1
 
 Derived from the stage-1 requirements document only. Each id below is printed by
 `run_probes.py` as `PASS <id>` or `FAIL <id>` (sub-checks add a letter or bracket suffix); ids with no probe are marked
@@ -210,3 +214,132 @@ The requirements do not name the success status for PATCH; the probes expect 200
 149. **RT-14** An export with an extra unknown top-level field still imports (unknown fields ignored).
 150. **RT-15** Reset after import clears everything: imported token 401, imported login 401, restaurants replaced.
 151. **RT-16** Export is a snapshot: a booking made after the export is absent once the export is imported (covered by RT-6).
+
+# Part B - stage 2 additions
+
+Stage-2 fixture used by the new groups: restaurant `r_combo` (Europe/Berlin, slot 30, duration 90,
+cutoff 120, Thu-Sun 18:00-23:00) with tables `c_a` Alcove (2), `c_b` Bay (2), `c_c` Corner (4),
+`c_d` Den (6) and `combinable: [["c_b","c_a"],["c_b","c_c"]]`. Pair Bay+Alcove seats 4, Bay+Corner
+seats 6; Alcove+Corner and Alcove+Den are not combinable whatever their capacities. The stage-1
+restaurants are kept unchanged (no `combinable`) so every stage-1 group still runs as written.
+In stage 2 every reservation body must carry `table_ids` and must carry `table_id` exactly when
+the set has one member; the shared shape validator enforces this in every stage-1 group too.
+
+## CFX - fixture (stage-2 Model)
+
+152. **CFX-1** A fixture with `combinable` pairs is accepted (204); a stage-1-shaped fixture (no `combinable`) is still accepted; a restaurant without `combinable` lists singles only in `available_options`.
+153. **CFX-2** A `combinable` entry that is a triple, a singleton, an unknown table id, a pair with a duplicated id, or a table of another restaurant is rejected 422 `validation_failed` and the previous state (tokens, bookings) is unchanged.
+154. **CFX-3** A seeded reservation with `table_ids` (pair) is visible with `table_ids` and no `table_id`, and blocks both members and every pair containing either.
+155. **CFX-4** A seeded reservation with `table_id` is visible with one-element `table_ids` and `table_id`.
+156. **CFX-5** A seeded reservation with `status: "cancelled"` is visible as `cancelled` and does not block availability.
+157. **CFX-6** `GET /restaurants/{id}` after a stage-2 fixture still returns the stage-1 fields equal to the fixture; whether `combinable` is echoed is **not asserted** (the enumerated field list in §8 does not name it).
+
+## CAV - availability with options (stage-2 API)
+
+158. **CAV-1** `available_table_ids` contains single tables only, exactly as in stage 1.
+159. **CAV-2** `available_options` lists singles first in fixture order, then pairs in `combinable` order, each pair's `table_ids` in `combinable` order (`["c_b","c_a"]`).
+160. **CAV-3** Option `capacity` is the table capacity for singles and the sum for pairs: party 4 yields `[c_c 4, c_d 6, c_b+c_a 4, c_b+c_c 6]`, party 5 yields `[c_d 6, c_b+c_c 6]`, party 7 yields `[]` while the slot still appears.
+161. **CAV-4** A pair disappears when any member is taken: a single booking on `c_a` removes `c_b+c_a` but not `c_b+c_c`.
+162. **CAV-5** A pair booking blocks each single member and every pair sharing a member; the half-open rule applies to the pair.
+163. **CAV-6** Combining is not transitive: `c_a+c_c` never appears; unlisted pairs never appear whatever the capacities.
+164. **CAV-7** A party that fits only a pair (party 5 with `c_d` taken) sees exactly that pair.
+165. **CAV-8** `available_options` is present on every slot, including slots with no option (`[]`).
+
+## CRS - create with table sets (stage-2 `POST /reservations`)
+
+166. **CRS-1** `table_ids` pair is 201 with `table_ids` equal to the pair as a set and no `table_id`.
+167. **CRS-2** Legacy `table_id` is 201 with one-element `table_ids` and `table_id`; one-element `table_ids` also yields `table_id`.
+168. **CRS-3** Both `table_id` and `table_ids` present is 422 `validation_failed`, even when they agree.
+169. **CRS-4** Duplicate id in `table_ids` is 422 `validation_failed`; empty `table_ids` is 422 `validation_failed`.
+170. **CRS-5** Three ids are 422 `combination_not_allowed`.
+171. **CRS-6** An unlisted pair is 422 `combination_not_allowed` whatever the capacities (`c_a+c_c`, `c_a+c_d`, `c_c+c_d`).
+172. **CRS-7** Party above the summed capacity is 422 `party_exceeds_capacity`; equal to the sum is 201.
+173. **CRS-8** Any member taken is 409 `table_unavailable`: a single on `c_a` blocks pair `c_b+c_a`; pair `c_b+c_c` blocks singles `c_c` and `c_b` and pair `c_b+c_a`, while `c_a` stays bookable.
+174. **CRS-9** `table_ids` of the wrong JSON type (string) is 400 `malformed_request`.
+175. **CRS-10** Every response shape carries `table_ids` and `table_id` only for one-member sets: create, list, get, cancel, PATCH, moves.
+176. **CRS-11** Cancelling a pair booking frees every member: both singles and the pair reappear.
+177. **CRS-12** Overlap on a pair booking follows the half-open rule (the adjacent slot is 201).
+
+## CID - idempotency with table sets (§7)
+
+178. **CID-1** Replay of a pair booking is 200 with the identical body; one reservation exists.
+179. **CID-2** Same key with a different pair is 409 `idempotency_key_reuse`.
+180. **CID-3** `{"table_id": "c_d"}` and `{"table_ids": ["c_d"]}` are different JSON bodies: same key gives 409 `idempotency_key_reuse`.
+181. **CID-4** Replay after the pair booking was cancelled is 200 with the original (confirmed) body.
+182. **CID-5** A key that failed with 422 `combination_not_allowed` is a first use next time.
+
+## CPT - PATCH with table sets
+
+183. **CPT-1** PATCH `table_ids` from a single to a pair is 200; the response has the pair and no `table_id`; the old table is freed and both members taken.
+184. **CPT-2** PATCH back to a single via `table_id` is 200 with `table_id`; via one-element `table_ids` likewise.
+185. **CPT-3** PATCH with both `table_id` and `table_ids` is 422 `validation_failed`.
+186. **CPT-4** PATCH to an unlisted pair or to three tables is 422 `combination_not_allowed`.
+187. **CPT-5** PATCH to a pair with a taken member is 409 `table_unavailable` and the booking is unchanged.
+188. **CPT-6** PATCH party above the pair's summed capacity is 422 `party_exceeds_capacity`.
+189. **CPT-7** A pair booking's own occupancy does not block moving to another pair sharing a member (`c_b+c_a` to `c_b+c_c`, same slot).
+190. **CPT-8** Moving a pair booking to another slot frees both members at the old slot.
+
+## CMV - moves with table sets (§11)
+
+191. **CMV-1** A move item with `table_ids` is 201 and the entry carries the pair.
+192. **CMV-2** A swap involving a pair (A `c_b+c_a` to `c_b+c_c`, B `c_c` to `c_a`, same slot) is 201 in input order.
+193. **CMV-3** Overlap among resulting bookings through a shared member is 409 `table_unavailable` and nothing changes.
+194. **CMV-4** An unlisted pair in a move is 422 `combination_not_allowed` and nothing changes.
+195. **CMV-5** Both `table_id` and `table_ids` in one item is 422 `validation_failed`.
+196. **CMV-6** Replay of a pair batch is 200 with the original body.
+197. **CMV-7** Overlap with an unlisted pair booking through one member is 409 `table_unavailable`.
+
+## CCN - concurrency with table sets (stage-2 "Concurrent bookings and amendments")
+
+198. **CCN-1** 24 distinct-key requests racing for one pair and slot: exactly one 201, the rest 409 `table_unavailable`, zero 5xx, one reservation.
+199. **CCN-2** 24 mixed requests racing for the pair, each member single and the overlapping pair: zero 5xx, at least one 201, every refusal 409 `table_unavailable`, and afterwards no table appears in two overlapping confirmed bookings.
+200. **CCN-3** 20 concurrent bookings, pair bookings and PATCHes onto one table and slot: zero 5xx, exactly one success, every refusal 409 `table_unavailable`, and the final state has no table in two overlapping confirmed bookings.
+201. **CCN-4** 24 identical pair requests with one unused key: exactly one 201, the rest 200 identical, one reservation.
+
+## UPG - upgrade from a stage-1 export (stage-2 "Existing clients after an upgrade")
+
+The probes import `fixtures/stage1_export.json`, a genuine export captured from the accepted
+stage-1 image (revision 797afdd) after seeding `r_combo` without `combinable` plus one seeded
+booking, logging in, signing up a user, booking twice, running a batch, cancelling once and
+failing one key. `fixtures/stage1_export_expected.json` holds the tokens, keys, bodies and
+original responses. Both files contain only throwaway test credentials for fixture users.
+
+202. **UPG-1** Importing the stage-1 export (format_version 1, `table_id`-only reservations, no `combinable`) is 204.
+203. **UPG-2** The stage-1 bearer tokens (login and signup) still work; the seeded and signed-up logins still work; a stage-2 token issued before the import is 401 (import removes previous credentials).
+204. **UPG-3** The caller's list equals the stage-1 list: ids, references, statuses and timestamps identical, each entry gaining `table_ids` equal to `[table_id]`.
+205. **UPG-4** Lookup by the seeded and the created references works; the cancelled one is still `cancelled`; the batch-amended party size is retained.
+206. **UPG-5** The original idempotent replays hold on both paths: 200 with the original body, either identical or identical plus `table_ids == [table_id]`.
+207. **UPG-6** The failed stage-1 key is a first use (201); a stage-1 key with a different body is 409 `idempotency_key_reuse`.
+208. **UPG-7** Imported reservations occupy their tables in availability; with no `combinable` in the imported state a pair booking is 422 `combination_not_allowed`.
+209. **UPG-8** Reset after the upgrade import clears everything (stage-1 token 401).
+210. **UPG-9** A stage-2 export containing a pair booking round-trips: import restores it with `table_ids` and its replay.
+
+## UI - browser (stage-2 screens; Playwright, headless Chromium)
+
+211. **UI-1** `/`, `/signup`, `/login`, `/lookup` answer 200 with `text/html`, and loading each makes no request to any host other than the service; no browser flow in the run contacts another host.
+212. **UI-2** Signup through the screen signs in: `current-user` text contains the display name.
+213. **UI-3** `current-user` is visible on every route while signed in; `logout-button` hides it.
+214. **UI-4** `auth-error` is absent before any error; login with a wrong password shows `auth-error`; a correct login shows `current-user`.
+215. **UI-5** After a search the grid has exactly one cell `slot-{table_id}-{HH:MM}` per table per slot, and `data-available` equals membership in `available_table_ids` for the searched party size.
+216. **UI-6** Combination cells `slot-{t_a}+{t_b}-{HH:MM}` use `combinable` order and are `data-available="true"` exactly for pairs in `available_options`; a pair not available is absent or `false`.
+217. **UI-7** A closed day shows `no-slots` and no `availability-grid`.
+218. **UI-8** Clicking an unavailable cell opens no `booking-form`; clicking an available cell while signed out shows `auth-error` or navigates to `/login`.
+219. **UI-9** Clicking an available cell while signed in opens `booking-form` with `booking-party-size` equal to the searched size and `booking-summary` naming the table label and the local start time.
+220. **UI-10** Submitting shows `confirmation` with `confirmation-reference` exactly the reference known to the API and `confirmation-details` containing restaurant name, table label and local start.
+221. **UI-11** A combination booking: `booking-summary` names both labels, `confirmation-tables` contains both labels, the API reservation holds both ids.
+222. **UI-12** Out-of-order: search A is held until after search B completes; the grid and the open form describe B; A's late response does not restore A.
+223. **UI-13** 409 path: the table is taken through the API after the form opened; submit shows `booking-error`, the cell is refreshed to `false`, `booking-form` and `booking-party-size` are preserved, no `confirmation`, no `booking-uncertain`.
+224. **UI-14** Lost response after commit: `booking-uncertain` nonempty, no `booking-error`, no `confirmation`; resubmitting sends the same `Idempotency-Key` and body; success clears the uncertainty and shows the original reference; exactly one reservation exists.
+225. **UI-15** Lost request before reaching the server: same recovery, same key and body on retry, one reservation.
+226. **UI-16** `booking-error` and `booking-uncertain` are never shown together (asserted on the 409 and lost-response paths).
+227. **UI-17** Resubmitting an unchanged successful form shows the same `confirmation-reference`, no `booking-error`, no new reservation; after a field changes the next submission is a new request with a new key and, once the slot is free again, a new reference.
+228. **UI-18** Lookup: found shows `reservation-detail`, `reservation-status` exactly `confirmed`, `reservation-tables` with every label for a pair; `reservation-cancel-button` cancels, status becomes exactly `cancelled`, the button disappears.
+229. **UI-19** Lookup of an unknown or another user's reference shows `reservation-error`; a cancel refused by the cutoff shows `reservation-error` and the status stays `confirmed`.
+230. **UI-20** Upgrade between browser requests: after export, mutation and import, the page without reload still shows `current-user`; a retry pending from a lost response taken before the export recovers the original `confirmation-reference`; lookup of a retained reference then works through the lookup screen.
+231. **UI-21** At 375 px and 1280 px no route and no grid produces horizontal scrolling (`scrollWidth <= clientWidth`).
+232. **UI-22** Every visible input and select has a visible associated label (`<label for>`, wrapping label, `aria-label` or `aria-labelledby`).
+233. **UI-23** Keyboard focus is visible: tabbing changes the focused element's outline, box-shadow, border or background.
+234. **UI-24** Available, unavailable and selected cells have distinguishable computed styles.
+235. **UI-25** A loading indicator exists while a search is pending (accepted signals: `aria-busy`, a testid containing `loading`, `role=status|progressbar`, a disabled search button, or visible text matching loading/searching/looking).
+236. **UI-26** Contrast and overall visual quality: **not automated** (judgement).
+237. **UI-27** Recovery across a full page reload: **not automated** (not required by the documents).

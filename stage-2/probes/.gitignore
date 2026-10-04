@@ -1,1 +1,6 @@
 __pycache__/
+test-results/
+playwright-report/
+*.png
+*.webm
+*.zip
