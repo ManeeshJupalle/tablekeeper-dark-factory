@@ -1,5 +1,5 @@
 Harness: Claude Code
-Model: claude-fable-5-1
+Model: claude-sonnet-5
 
 # coordinator
 
