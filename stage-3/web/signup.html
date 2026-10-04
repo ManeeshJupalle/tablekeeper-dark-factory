@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign up · Tablekeeper</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body data-page="signup">
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Tablekeeper</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="/">Find a table</a>
+      <a href="/lookup">Your reservation</a>
+    </nav>
+    <div class="auth-slot" id="auth-slot"></div>
+  </div>
+</header>
+
+<main id="main" class="container narrow">
+  <section class="card auth-card" aria-labelledby="signup-heading">
+    <p class="eyebrow">New here?</p>
+    <h1 id="signup-heading">Create your account</h1>
+    <p class="lede">Book in seconds and keep every reservation in one place.</p>
+    <div id="auth-status"></div>
+    <form id="signup-form" class="stack" novalidate>
+      <div class="field">
+        <label for="signup-name">Your name</label>
+        <input id="signup-name" type="text" autocomplete="name" data-testid="signup-display-name" placeholder="How should we greet you?">
+      </div>
+      <div class="field">
+        <label for="signup-email">Email</label>
+        <input id="signup-email" type="email" autocomplete="email" data-testid="signup-email" required>
+      </div>
+      <div class="field">
+        <label for="signup-password">Password <span class="hint">at least 8 characters</span></label>
+        <input id="signup-password" type="password" autocomplete="new-password" minlength="8" data-testid="signup-password" required>
+      </div>
+      <div id="auth-messages"></div>
+      <button type="submit" class="btn btn-primary btn-block" data-testid="signup-submit">Create account</button>
+      <p class="muted center">Already have an account? <a href="/login">Log in</a></p>
+    </form>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="container">Tablekeeper · reservations for restaurants and the people who love them</div></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

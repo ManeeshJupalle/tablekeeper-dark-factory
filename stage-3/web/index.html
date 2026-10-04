@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find a table · Tablekeeper</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body data-page="search">
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Tablekeeper</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="/" aria-current="page">Find a table</a>
+      <a href="/lookup">Your reservation</a>
+    </nav>
+    <div class="auth-slot" id="auth-slot"></div>
+  </div>
+</header>
+
+<main id="main" class="container">
+  <section class="hero">
+    <p class="eyebrow">Tonight, or any night</p>
+    <h1>Find a table that fits your party</h1>
+    <p class="lede">Pick a restaurant, a date and how many of you there are. We will show every seating that is free, including tables that can be joined for larger groups.</p>
+  </section>
+
+  <section class="card search-card" aria-labelledby="search-heading">
+    <h2 id="search-heading" class="card-title">Search availability</h2>
+    <form id="search-form" class="search-form" novalidate>
+      <div class="field">
+        <label for="restaurant">Restaurant</label>
+        <select id="restaurant" name="restaurant" data-testid="restaurant-select" required><!--RESTAURANT_OPTIONS--></select>
+      </div>
+      <div class="field">
+        <label for="date">Date</label>
+        <input id="date" name="date" type="date" data-testid="date-input" required>
+      </div>
+      <div class="field field-narrow">
+        <label for="party">Party size</label>
+        <input id="party" name="party" type="number" min="1" step="1" value="2" inputmode="numeric" data-testid="party-size-input" required>
+      </div>
+      <div class="field field-action">
+        <button type="submit" class="btn btn-primary" data-testid="search-button">Check availability</button>
+      </div>
+    </form>
+  </section>
+
+  <div class="results-layout">
+    <section class="results" aria-labelledby="results-heading" aria-live="polite">
+      <h2 id="results-heading" class="section-title">Available seatings</h2>
+      <div id="results"><p class="empty-state">Choose a restaurant, date and party size, then check availability to see every open seating.</p></div>
+    </section>
+    <aside class="booking-panel" id="booking-panel" aria-live="polite"></aside>
+  </div>
+</main>
+
+<footer class="site-footer"><div class="container">Tablekeeper · reservations for restaurants and the people who love them</div></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
