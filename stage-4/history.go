@@ -13,6 +13,8 @@ const (
 	eventCreated   = "created"
 	eventChanged   = "changed"
 	eventCancelled = "cancelled"
+	// eventReassigned records a seating repair applied by a plan (stage 4).
+	eventReassigned = "reassigned"
 
 	fieldTableID       = "table_id"
 	fieldTableIDs      = "table_ids"
@@ -35,6 +37,7 @@ type HistoryEntry struct {
 	Changes  []Change
 	Revision int    // the reservation's revision after this event
 	Terms    *Terms // the terms accepted at this event
+	PlanID   string // set on reassigned entries
 }
 
 // tableChange describes a table-set change: table_id between two single tables,
@@ -79,15 +82,22 @@ func amendmentChanges(oldIDs []string, oldLocal localTime, oldParty int, res *Re
 }
 
 // record appends an entry carrying the reservation's current revision and terms.
-func (res *Reservation) record(event string, at time.Time, changes []Change) {
-	res.History = append(res.History, &HistoryEntry{
+func (res *Reservation) record(event string, at time.Time, changes []Change) *HistoryEntry {
+	h := &HistoryEntry{
 		Seq:      len(res.History) + 1,
 		At:       at,
 		Event:    event,
 		Changes:  changes,
 		Revision: res.Revision,
 		Terms:    res.Terms,
-	})
+	}
+	res.History = append(res.History, h)
+	return h
+}
+
+// reassignmentChange always names the complete table sets, even single to single.
+func reassignmentChange(from, to []string) Change {
+	return Change{Field: fieldTableIDs, From: append([]string{}, from...), To: append([]string{}, to...)}
 }
 
 type historyEntryView struct {
@@ -97,6 +107,7 @@ type historyEntryView struct {
 	Changes       []Change  `json:"changes"`
 	Revision      int       `json:"revision"`
 	AcceptedTerms termsView `json:"accepted_terms"`
+	PlanID        string    `json:"plan_id,omitempty"`
 }
 
 func historyViewOf(res *Reservation) []historyEntryView {
@@ -108,7 +119,7 @@ func historyViewOf(res *Reservation) []historyEntryView {
 		}
 		out = append(out, historyEntryView{
 			Seq: h.Seq, At: formatTime(h.At.UTC()), Event: h.Event, Changes: changes,
-			Revision: h.Revision, AcceptedTerms: termsViewOf(h.Terms),
+			Revision: h.Revision, AcceptedTerms: termsViewOf(h.Terms), PlanID: h.PlanID,
 		})
 	}
 	return out

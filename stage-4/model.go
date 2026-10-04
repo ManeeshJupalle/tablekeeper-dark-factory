@@ -24,9 +24,12 @@ const (
 	// table or one declared combinable pair.
 	maxTablesPerBooking = 2
 
-	// initialRevision is the revision of every new reservation, series and
-	// restaurant (after reset or import).
+	// initialRevision is the revision of every new reservation and series.
 	initialRevision = 1
+
+	// initialRestaurantRevision is a restaurant's revision after reset, or after
+	// importing an export that carries none (stages 1 and 2).
+	initialRestaurantRevision = 0
 )
 
 type User struct {
@@ -109,6 +112,7 @@ type Restaurant struct {
 	Combinable [][]string // declared pairs, each in fixture order
 	Managers   []string
 	Policies   []*Policy // publication order; Policies[i] has version i+1
+	Closures   []Closure // applied table closures (stage 4)
 	Revision   int
 	Location   *time.Location
 }
@@ -258,6 +262,8 @@ type State struct {
 	idem            map[idemKey]*IdemRecord
 	series          []*Series
 	seriesByID      map[string]*Series
+	plans           []*Plan
+	plansByID       map[string]*Plan
 }
 
 func newState() *State {
@@ -270,6 +276,7 @@ func newState() *State {
 		reservationByRf: map[string]*Reservation{},
 		idem:            map[idemKey]*IdemRecord{},
 		seriesByID:      map[string]*Series{},
+		plansByID:       map[string]*Plan{},
 	}
 }
 
@@ -290,6 +297,11 @@ func (s *State) addReservation(r *Reservation) {
 	s.reservations = append(s.reservations, r)
 	s.reservationByID[r.ID] = r
 	s.reservationByRf[r.Reference] = r
+}
+
+func (s *State) addPlan(p *Plan) {
+	s.plans = append(s.plans, p)
+	s.plansByID[p.ID] = p
 }
 
 func (s *State) addSeries(sr *Series) {
@@ -348,6 +360,15 @@ func (s *State) newSeriesID() string {
 	for {
 		id := "ser_" + randomHex(randomIDBytes)
 		if s.seriesByID[id] == nil {
+			return id
+		}
+	}
+}
+
+func (s *State) newPlanID() string {
+	for {
+		id := "plan_" + randomHex(randomIDBytes)
+		if s.plansByID[id] == nil {
 			return id
 		}
 	}

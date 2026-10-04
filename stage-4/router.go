@@ -94,6 +94,14 @@ func (a *app) route(w http.ResponseWriter, r *http.Request) {
 		dispatch(w, r, methodHandlers{http.MethodGet: func(w http.ResponseWriter, r *http.Request) {
 			a.reservationDecision(w, r, segments[1])
 		}})
+	case len(segments) == 3 && segments[0] == "restaurants" && segments[2] == "replans":
+		dispatch(w, r, methodHandlers{http.MethodPost: func(w http.ResponseWriter, r *http.Request) { a.previewReplan(w, r, segments[1]) }})
+	case len(segments) == 5 && segments[0] == "restaurants" && segments[2] == "replans" && segments[4] == "apply":
+		dispatch(w, r, methodHandlers{http.MethodPost: func(w http.ResponseWriter, r *http.Request) {
+			a.applyReplan(w, r, segments[1], segments[3])
+		}})
+	case len(segments) == 3 && segments[0] == "series" && segments[2] == "amend":
+		dispatch(w, r, methodHandlers{http.MethodPost: func(w http.ResponseWriter, r *http.Request) { a.amendSeries(w, r, segments[1]) }})
 	case path == pathSeries:
 		dispatch(w, r, methodHandlers{http.MethodPost: a.createSeries})
 	case len(segments) == 2 && segments[0] == "series":

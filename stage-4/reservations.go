@@ -226,8 +226,12 @@ func (s *State) tableBusy(rest *Restaurant, tableID string, start, end time.Time
 }
 
 // setBusy reports whether any table of the set is occupied during [start, end).
-// Each existing booking occupies its tables for its own accepted duration.
+// Each existing booking occupies its tables for its own accepted duration, and
+// an applied closure occupies its table for its whole interval (stage 4).
 func (s *State) setBusy(rest *Restaurant, ids []string, start, end time.Time, exclude map[string]bool) bool {
+	if rest.closed(ids, start, end) {
+		return true
+	}
 	for _, res := range s.reservations {
 		if res.Status != statusConfirmed || res.RestaurantID != rest.ID || exclude[res.ID] || !sharesTable(res.TableIDs, ids) {
 			continue

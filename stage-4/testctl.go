@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // Test-control endpoints (§3.3, §10): reset, export and import. Each replaces or
@@ -47,13 +48,45 @@ type exportState struct {
 	Restaurants  []exportRestaurant  `json:"restaurants"`
 	Reservations []exportReservation `json:"reservations"`
 	Series       []exportSeries      `json:"series"`
+	Plans        []exportPlan        `json:"plans"`
 	Idempotency  []exportIdem        `json:"idempotency"`
 }
 
-// exportRestaurant is the fixture configuration plus revision and policies.
+type exportClosure struct {
+	TableID string `json:"table_id"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	PlanID  string `json:"plan_id"`
+}
+
+type exportAssignment struct {
+	ReservationID string   `json:"reservation_id"`
+	Reference     string   `json:"reference"`
+	TableIDs      []string `json:"table_ids"`
+	Changed       bool     `json:"changed"`
+}
+
+type exportPlan struct {
+	ID                 string             `json:"id"`
+	RestaurantID       string             `json:"restaurant_id"`
+	RestaurantRevision int                `json:"restaurant_revision"`
+	Closure            exportClosure      `json:"closure"`
+	Assignments        []exportAssignment `json:"assignments"`
+	MovedCount         int                `json:"moved_count"`
+	UnusedSeats        int                `json:"unused_seats"`
+	Applied            bool               `json:"applied"`
+}
+
+func exportClosureOf(c Closure) exportClosure {
+	return exportClosure{TableID: c.TableID, From: c.FromRaw, To: c.ToRaw, PlanID: c.PlanID}
+}
+
+// exportRestaurant is the fixture configuration plus revision, policies and
+// applied closures.
 type exportRestaurant struct {
 	restaurantDetail
-	Policies []policyView `json:"policies"`
+	Policies []policyView    `json:"policies"`
+	Closures []exportClosure `json:"closures"`
 }
 
 type exportOccurrence struct {
@@ -116,6 +149,7 @@ func snapshot(st *State) exportEnvelope {
 		Restaurants:  []exportRestaurant{},
 		Reservations: []exportReservation{},
 		Series:       []exportSeries{},
+		Plans:        []exportPlan{},
 		Idempotency:  []exportIdem{},
 	}
 	for _, u := range st.users {
@@ -130,11 +164,23 @@ func snapshot(st *State) exportEnvelope {
 		}
 	}
 	for _, r := range st.restaurants {
-		er := exportRestaurant{restaurantDetail: detailOf(r), Policies: []policyView{}}
+		er := exportRestaurant{restaurantDetail: detailOf(r), Policies: []policyView{}, Closures: []exportClosure{}}
 		for _, p := range r.Policies {
 			er.Policies = append(er.Policies, policyViewOf(p))
 		}
+		for _, c := range r.Closures {
+			er.Closures = append(er.Closures, exportClosureOf(c))
+		}
 		out.Restaurants = append(out.Restaurants, er)
+	}
+	for _, p := range st.plans {
+		ep := exportPlan{ID: p.ID, RestaurantID: p.RestaurantID, RestaurantRevision: p.RestaurantRevision,
+			Closure: exportClosureOf(p.Closure), Assignments: []exportAssignment{},
+			MovedCount: p.MovedCount, UnusedSeats: p.UnusedSeats, Applied: p.Applied}
+		for _, a := range p.Assignments {
+			ep.Assignments = append(ep.Assignments, exportAssignment{a.ReservationID, a.Reference, append([]string{}, a.TableIDs...), a.Changed})
+		}
+		out.Plans = append(out.Plans, ep)
 	}
 	for _, sr := range st.series {
 		es := exportSeries{ID: sr.ID, UserID: sr.UserID, RestaurantID: sr.RestaurantID,
@@ -305,6 +351,15 @@ func stateFromExport(envelope obj) (*State, *apiError) {
 			return nil, e
 		}
 	}
+	plans, e := arrayField(state, "plans")
+	if e != nil {
+		return nil, e
+	}
+	for _, pv := range plans {
+		if e := addImportedPlan(st, pv); e != nil {
+			return nil, e
+		}
+	}
 	records, e := arrayField(state, "idempotency")
 	if e != nil {
 		return nil, e
@@ -380,6 +435,116 @@ func addImportedSeries(st *State, v any) *apiError {
 		sr.Occurrences = append(sr.Occurrences, &Occurrence{Index: index, ReservationID: resID, Exception: exception})
 	}
 	st.addSeries(sr)
+	return nil
+}
+
+// parseClosure reads an exported closure of a restaurant's table.
+func parseClosure(rest *Restaurant, v any) (Closure, *apiError) {
+	o, e := objectAt(v, "closure")
+	if e != nil {
+		return Closure{}, e
+	}
+	c := Closure{}
+	if c.TableID, e = requiredString(o, "table_id"); e != nil {
+		return c, e
+	}
+	if rest.table(c.TableID) == nil {
+		return c, invalid("closure names an unknown table")
+	}
+	if c.FromRaw, e = requiredString(o, "from"); e != nil {
+		return c, e
+	}
+	if c.ToRaw, e = requiredString(o, "to"); e != nil {
+		return c, e
+	}
+	var err error
+	if c.From, err = time.Parse(time.RFC3339, c.FromRaw); err != nil {
+		return c, invalid("closure from must be RFC 3339")
+	}
+	if c.To, err = time.Parse(time.RFC3339, c.ToRaw); err != nil {
+		return c, invalid("closure to must be RFC 3339")
+	}
+	if !c.From.Before(c.To) {
+		return c, invalid("closure from must be earlier than to")
+	}
+	if c.PlanID, e = optionalString(o, "plan_id"); e != nil {
+		return c, e
+	}
+	return c, nil
+}
+
+// addImportedPlan restores a stored plan, pending or applied.
+func addImportedPlan(st *State, v any) *apiError {
+	o, e := objectAt(v, "plan")
+	if e != nil {
+		return e
+	}
+	p := &Plan{Assignments: []Assignment{}}
+	if p.ID, e = identifier(o, "id"); e != nil {
+		return e
+	}
+	if st.plansByID[p.ID] != nil {
+		return invalid("duplicate plan id " + p.ID)
+	}
+	if p.RestaurantID, e = requiredString(o, "restaurant_id"); e != nil {
+		return e
+	}
+	rest := st.restaurantsByID[p.RestaurantID]
+	if rest == nil {
+		return invalid("plan names an unknown restaurant")
+	}
+	if p.RestaurantRevision, e = requiredInt(o, "restaurant_revision", initialRestaurantRevision); e != nil {
+		return e
+	}
+	if p.Closure, e = parseClosure(rest, o["closure"]); e != nil {
+		return e
+	}
+	p.Closure.PlanID = p.ID
+	if p.MovedCount, e = requiredInt(o, "moved_count", 0); e != nil {
+		return e
+	}
+	if p.UnusedSeats, e = requiredInt(o, "unused_seats", 0); e != nil {
+		return e
+	}
+	applied, ok := o["applied"].(bool)
+	if !ok {
+		return invalid("plan applied must be a boolean")
+	}
+	p.Applied = applied
+	assignments, e := arrayField(o, "assignments")
+	if e != nil {
+		return e
+	}
+	for _, av := range assignments {
+		ao, e := objectAt(av, "assignment")
+		if e != nil {
+			return e
+		}
+		asg := Assignment{}
+		if asg.ReservationID, e = requiredString(ao, "reservation_id"); e != nil {
+			return e
+		}
+		res := st.reservationByID[asg.ReservationID]
+		if res == nil || res.RestaurantID != rest.ID {
+			return invalid("plan assignment names an unknown reservation")
+		}
+		asg.Reference = res.Reference
+		ids, e := parseTableSet(ao)
+		if e != nil || ids == nil {
+			return invalid("plan assignment needs table_ids")
+		}
+		for _, id := range ids {
+			if rest.table(id) == nil {
+				return invalid("plan assignment names an unknown table")
+			}
+		}
+		asg.TableIDs = ids
+		if asg.Changed, ok = ao["changed"].(bool); !ok {
+			return invalid("plan assignment changed must be a boolean")
+		}
+		p.Assignments = append(p.Assignments, asg)
+	}
+	st.addPlan(p)
 	return nil
 }
 

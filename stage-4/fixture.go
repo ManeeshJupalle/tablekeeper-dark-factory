@@ -86,7 +86,7 @@ func parseRestaurant(v any, imported bool) (*Restaurant, *apiError) {
 	if e != nil {
 		return nil, e
 	}
-	r := &Restaurant{Base: &Terms{}, Revision: initialRevision}
+	r := &Restaurant{Base: &Terms{}, Revision: initialRestaurantRevision}
 	if r.ID, e = identifier(o, "id"); e != nil {
 		return nil, e
 	}
@@ -179,11 +179,22 @@ func parseRestaurant(v any, imported bool) (*Restaurant, *apiError) {
 // published policies, which must carry versions 1, 2, ... in publication order.
 func readImportedRestaurant(r *Restaurant, o obj) *apiError {
 	if _, present := o["revision"]; present {
-		rev, e := requiredInt(o, "revision", initialRevision)
+		rev, e := requiredInt(o, "revision", initialRestaurantRevision)
 		if e != nil {
 			return e
 		}
 		r.Revision = rev
+	}
+	closures, e := arrayField(o, "closures")
+	if e != nil {
+		return e
+	}
+	for _, cv := range closures {
+		c, e := parseClosure(r, cv)
+		if e != nil {
+			return e
+		}
+		r.Closures = append(r.Closures, c)
 	}
 	policies, e := arrayField(o, "policies")
 	if e != nil {
@@ -514,7 +525,7 @@ func parseHistoryEntry(rest *Restaurant, v any) (*HistoryEntry, *apiError) {
 	if h.Event, e = requiredString(o, "event"); e != nil {
 		return nil, e
 	}
-	if h.Event != eventCreated && h.Event != eventChanged && h.Event != eventCancelled {
+	if h.Event != eventCreated && h.Event != eventChanged && h.Event != eventCancelled && h.Event != eventReassigned {
 		return nil, invalid("unknown history event " + h.Event)
 	}
 	changes, e := arrayField(o, "changes")
@@ -537,6 +548,9 @@ func parseHistoryEntry(rest *Restaurant, v any) (*HistoryEntry, *apiError) {
 		return nil, e
 	}
 	if h.Terms, e = importedTerms(rest, o["accepted_terms"]); e != nil {
+		return nil, e
+	}
+	if h.PlanID, e = optionalString(o, "plan_id"); e != nil {
 		return nil, e
 	}
 	return h, nil

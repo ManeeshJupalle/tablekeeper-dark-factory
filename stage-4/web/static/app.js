@@ -371,6 +371,22 @@
       ]);
     }
 
+    // A replayed booking response is the original receipt; the booking itself may
+    // since have been reseated by the restaurant (stage 4). Show its current
+    // tables and time from the server, keeping the same reference.
+    async function refreshConfirmation(b, token) {
+      const ref = b.confirmation && b.confirmation.reference;
+      if (!ref) return;
+      try {
+        const res = await api('GET', '/reservations/' + encodeURIComponent(ref), { token });
+        if (booking !== b || !b.confirmation || b.confirmation.reference !== ref) return;
+        if (res.status === 200 && res.data && res.data.reference === ref) {
+          b.confirmation = res.data;
+          renderOutcome();
+        }
+      } catch (err) { /* keep the receipt already shown */ }
+    }
+
     async function submitBooking(e) {
       e.preventDefault();
       const b = booking;
@@ -399,6 +415,7 @@
         b.confirmation = result.data; b.error = null; b.uncertain = null;
         renderOutcome();
         if (current) runSearch(current.params, true); // the taken seating greys out in the grid
+        refreshConfirmation(b, s.token);
         return;
       }
       if (result.status >= 500 || result.data === null) {

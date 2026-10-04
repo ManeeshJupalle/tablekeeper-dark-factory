@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -195,4 +196,131 @@ func (a *app) getSeries(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	writeJSON(w, http.StatusOK, seriesViewOf(st, sr))
+}
+
+// Amending a recurring series (stage 4): move the clock time of every eligible
+// occurrence at or after from_index, on its own scheduled date, in one step.
+
+var clockTimeRE = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
+
+func seriesAmendPath(id string) string { return pathSeries + "/" + id + "/amend" }
+
+type plannedOccurrence struct {
+	res *Reservation
+	p   placement
+}
+
+func (a *app) amendSeries(w http.ResponseWriter, r *http.Request, id string) {
+	body, e := readBody(w, r, maxBodyBytes)
+	if e != nil {
+		writeError(w, e)
+		return
+	}
+	a.store.mu.Lock()
+	defer a.store.mu.Unlock()
+	st := a.store.state
+	m, e := parseJSONObject(body)
+	if e != nil {
+		writeError(w, e)
+		return
+	}
+	user, e := authenticate(st, r)
+	if e != nil {
+		writeError(w, e)
+		return
+	}
+	sr := st.seriesByID[id]
+	if sr == nil || sr.UserID != user.ID {
+		writeError(w, notFound("no such series"))
+		return
+	}
+	key, e := idempotencyKey(r)
+	if e != nil {
+		writeError(w, e)
+		return
+	}
+	k := idemKey{user.ID, http.MethodPost, seriesAmendPath(sr.ID), key}
+	canonical := canonicalJSON(m)
+	if replay(w, st, k, canonical) {
+		return
+	}
+
+	// Every input problem, wrong JSON types included, is 422.
+	expected, ok := jsonInt(m["expected_revision"])
+	if !ok || expected < 1 {
+		writeError(w, invalid("expected_revision must be a positive integer"))
+		return
+	}
+	fromIndex, ok := jsonInt(m["from_index"])
+	if !ok || fromIndex < 0 || fromIndex >= int64(len(sr.Occurrences)) {
+		writeError(w, invalid("from_index must be an integer in 0..count-1"))
+		return
+	}
+	clock, _ := m["local_time"].(string)
+	match := clockTimeRE.FindStringSubmatch(clock)
+	if match == nil {
+		writeError(w, invalid("local_time must be HH:MM between 00:00 and 23:59"))
+		return
+	}
+	minute := atoi(match[1])*minutesPerHour + atoi(match[2])
+	if expected != int64(sr.Revision) {
+		writeError(w, fail(http.StatusConflict, codeStaleRevision, "the series has changed since that revision"))
+		return
+	}
+	rest := st.restaurantsByID[sr.RestaurantID]
+
+	// Non-occupancy checks in occurrence-index order: the old accepted cutoff,
+	// then the resulting date's policy, exactly like an individual PATCH.
+	checkedAt := time.Now()
+	planned := []plannedOccurrence{}
+	for _, o := range sr.Occurrences[fromIndex:] {
+		res := st.reservationByID[o.ReservationID]
+		if o.Exception || res.Status == statusCancelled {
+			continue
+		}
+		lt := localTime{res.StartsAtLocal.localDate, minute}
+		if lt == res.StartsAtLocal {
+			continue // no-op: keeps its terms and revision
+		}
+		if cutoffPassed(res, checkedAt) {
+			writeError(w, fail(http.StatusConflict, codeCutoffPassed, "an occurrence is past its amendment cutoff"))
+			return
+		}
+		p, e := resolvePlacement(rest, res.TableIDs, lt, res.PartySize)
+		if e != nil {
+			writeError(w, e)
+			return
+		}
+		planned = append(planned, plannedOccurrence{res, p})
+	}
+
+	// Occupancy: the changed occurrences release their old slots together and
+	// must clear unchanged occurrences, other bookings, closures and each other.
+	moving := map[string]bool{}
+	for _, po := range planned {
+		moving[po.res.ID] = true
+	}
+	for i, po := range planned {
+		start, end := po.p.startsAt, po.p.endsAt()
+		busy := st.setBusy(rest, po.p.tableIDs, start, end, moving)
+		for _, other := range planned[:i] {
+			busy = busy || (sharesTable(other.p.tableIDs, po.p.tableIDs) && overlaps(start, end, other.p.startsAt, other.p.endsAt()))
+		}
+		if busy {
+			writeError(w, tableUnavailable)
+			return
+		}
+	}
+
+	if len(planned) > 0 {
+		at := stamp()
+		for _, po := range planned {
+			applyAmendment(po.res, po.p, at) // ordinary changed entry; no exception
+		}
+		sr.Revision++
+		rest.Revision++
+	}
+	resp, _ := json.Marshal(seriesViewOf(st, sr))
+	st.idem[k] = &IdemRecord{idemKey: k, Body: canonical, Status: http.StatusCreated, Response: resp}
+	writeRaw(w, http.StatusCreated, resp)
 }
